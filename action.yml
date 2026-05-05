@@ -41,6 +41,20 @@ runs:
       run: |
         npm ci
         npm run build
+    - name: Resolve output paths
+      id: output-paths
+      shell: bash
+      run: |
+        sarif_output="${{ inputs.sarif-output }}"
+        markdown_output="${{ inputs.markdown-output }}"
+        if [[ "$sarif_output" != /* ]]; then
+          sarif_output="$GITHUB_WORKSPACE/$sarif_output"
+        fi
+        if [[ "$markdown_output" != /* ]]; then
+          markdown_output="$GITHUB_WORKSPACE/$markdown_output"
+        fi
+        echo "sarif=$sarif_output" >> "$GITHUB_OUTPUT"
+        echo "markdown=$markdown_output" >> "$GITHUB_OUTPUT"
     - name: Run trawly
       shell: bash
       run: |
@@ -52,7 +66,7 @@ runs:
         if [[ -n "${{ inputs.baseline }}" ]]; then
           args+=(--baseline "${{ inputs.baseline }}")
         fi
-        node "$GITHUB_ACTION_PATH/dist/cli.js" "${args[@]}" --format sarif --output "${{ inputs.sarif-output }}"
+        node "$GITHUB_ACTION_PATH/dist/cli.js" "${args[@]}" --format sarif --output "${{ steps.output-paths.outputs.sarif }}"
         status=$?
         inspect_args=(inspect "${{ inputs.path }}")
         if [[ -n "${{ inputs.config }}" ]]; then
@@ -61,14 +75,14 @@ runs:
         if [[ -n "${{ inputs.baseline }}" ]]; then
           inspect_args+=(--baseline "${{ inputs.baseline }}")
         fi
-        node "$GITHUB_ACTION_PATH/dist/cli.js" "${inspect_args[@]}" --format markdown --output "${{ inputs.markdown-output }}" || true
+        node "$GITHUB_ACTION_PATH/dist/cli.js" "${inspect_args[@]}" --format markdown --output "${{ steps.output-paths.outputs.markdown }}" || true
         echo "$status" > "$RUNNER_TEMP/trawly-exit-code"
         exit 0
     - name: Upload SARIF
       if: ${{ inputs.upload-sarif == 'true' }}
       uses: github/codeql-action/upload-sarif@v4
       with:
-        sarif_file: ${{ inputs.sarif-output }}
+        sarif_file: ${{ steps.output-paths.outputs.sarif }}
         category: trawly
     - name: Preserve trawly exit code
       shell: bash
