@@ -2,6 +2,7 @@ import { fingerprintFinding } from "./fingerprint.js";
 import type { Finding, PackageInstance } from "./types.js";
 
 const REGISTRY_URL = "https://registry.npmjs.org";
+const REGISTRY_ENV = "TRAWLY_NPM_REGISTRY_URL";
 const REQUEST_TIMEOUT_MS = 15_000;
 const NEW_VERSION_DAYS = 30;
 const NEW_PACKAGE_DAYS = 90;
@@ -126,10 +127,11 @@ async function fetchPackument(
   fetchImpl: typeof fetch,
   name: string,
 ): Promise<Packument> {
+  const registry = (process.env[REGISTRY_ENV] ?? REGISTRY_URL).replace(/\/+$/, "");
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
-    const res = await fetchImpl(`${REGISTRY_URL}/${encodePackageName(name)}`, {
+    const res = await fetchImpl(`${registry}/${encodePackageName(name)}`, {
       signal: controller.signal,
       headers: { accept: "application/json" },
     });
