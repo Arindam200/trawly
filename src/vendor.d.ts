@@ -1,8 +1,13 @@
 declare module "@yarnpkg/lockfile" {
-  export function parse(input: string): {
-    type: "success" | "merge" | "conflict";
-    object: Record<string, unknown>;
-  };
+  export interface YarnLockfileApi {
+    parse(input: string): {
+      type: "success" | "merge" | "conflict";
+      object: Record<string, unknown>;
+    };
+  }
+  export const parse: YarnLockfileApi["parse"];
+  const api: YarnLockfileApi;
+  export default api;
 }
 
 declare module "packageurl-js" {

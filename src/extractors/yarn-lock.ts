@@ -1,9 +1,15 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
-import * as yarnClassic from "@yarnpkg/lockfile";
+import * as yarnClassicModule from "@yarnpkg/lockfile";
 import type { PackageInstance } from "../types.js";
 import { readPackageJsonInfoFrom } from "./package-json.js";
+
+const yarnClassic = (
+  "parse" in yarnClassicModule
+    ? yarnClassicModule
+    : (yarnClassicModule as { default: typeof yarnClassicModule }).default
+) as { parse(input: string): { type: string; object: Record<string, unknown> } };
 
 interface YarnClassicEntry {
   version?: string;
