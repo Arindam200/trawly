@@ -201,12 +201,15 @@ npm run build
 # Extra parser dialect corpus and generated invariant checks.
 npm run test:corpus
 
+# Live differential checks against npm, pnpm, Yarn classic, and Yarn Berry.
+npm run test:differential
+
 # Larger generated graphs and OSV reliability behavior.
 npm run test:stress
 ```
 
-The optional `trawly-reliability` workflow can run the corpus and stress layers
-on demand in GitHub Actions.
+The optional `trawly-reliability` workflow can run the corpus, package-manager
+differential, and stress layers on demand in GitHub Actions.
 
 ## Roadmap
 

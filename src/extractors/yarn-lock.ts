@@ -90,9 +90,12 @@ export function parseYarnBerryLock(
     if (descriptor === "__metadata" || !isRecord(value)) continue;
     const entry = value as YarnBerryEntry;
     if (!entry.version) continue;
+    const resolution = entry.resolution ?? descriptor;
+    if (resolution.includes("@workspace:")) {
+      continue;
+    }
     const name =
-      parseYarnDescriptorName(entry.resolution ?? "") ??
-      parseYarnDescriptorName(descriptor);
+      parseYarnDescriptorName(resolution) ?? parseYarnDescriptorName(descriptor);
     if (!name) continue;
     const direct = rootInfo.allDirect.has(name);
     instances.push({
