@@ -28,6 +28,8 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "test": "vitest run",
+    "test:corpus": "vitest run tests/corpus-edge-cases.test.ts tests/property-generated.test.ts",
+    "test:stress": "TRAWLY_STRESS=1 vitest run tests/stress-reliability.test.ts",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "scan": "node --import tsx/esm src/cli.ts scan",

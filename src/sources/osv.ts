@@ -303,7 +303,11 @@ async function postJson<T>(
         signal: controller.signal,
       });
       if (!res.ok) {
-        throw new HttpError(`OSV ${res.status}: ${res.statusText}`, res.status);
+        throw new HttpError(
+          `OSV ${res.status}: ${res.statusText}`,
+          res.status,
+          retryAfterMs(res.headers),
+        );
       }
       return (await res.json()) as T;
     } finally {
@@ -319,7 +323,11 @@ async function getJson<T>(fetchImpl: typeof fetch, url: string): Promise<T> {
     try {
       const res = await fetchImpl(url, { signal: controller.signal });
       if (!res.ok) {
-        throw new HttpError(`OSV ${res.status}: ${res.statusText}`, res.status);
+        throw new HttpError(
+          `OSV ${res.status}: ${res.statusText}`,
+          res.status,
+          retryAfterMs(res.headers),
+        );
       }
       return (await res.json()) as T;
     } finally {
@@ -329,7 +337,11 @@ async function getJson<T>(fetchImpl: typeof fetch, url: string): Promise<T> {
 }
 
 class HttpError extends Error {
-  constructor(message: string, public readonly status: number) {
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly retryAfterMs?: number,
+  ) {
     super(message);
   }
 }
@@ -342,16 +354,29 @@ async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
     } catch (err) {
       lastErr = err;
       if (!isRetryable(err) || attempt === MAX_RETRIES) break;
-      await new Promise((r) => setTimeout(r, 250 * 2 ** attempt));
+      const delay = err instanceof HttpError && err.retryAfterMs !== undefined
+        ? err.retryAfterMs
+        : 250 * 2 ** attempt;
+      await new Promise((r) => setTimeout(r, delay));
     }
   }
   throw lastErr;
 }
 
 function isRetryable(err: unknown): boolean {
-  if (err instanceof HttpError) return err.status >= 500;
+  if (err instanceof HttpError) return err.status === 429 || err.status >= 500;
   // AbortError (timeout) and network errors are retryable.
   return true;
+}
+
+function retryAfterMs(headers: Headers): number | undefined {
+  const value = headers.get("retry-after");
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const date = Date.parse(value);
+  if (Number.isNaN(date)) return undefined;
+  return Math.max(0, date - Date.now());
 }
 
 function truncate(s: string, max: number): string {

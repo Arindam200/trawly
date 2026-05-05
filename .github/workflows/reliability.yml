@@ -1,0 +1,21 @@
+name: trawly-reliability
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  corpus-and-stress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run test:corpus
+      - run: npm run test:stress

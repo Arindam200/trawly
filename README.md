@@ -191,6 +191,23 @@ jobs:
             trawly.md
 ```
 
+## Testing
+
+```bash
+npm test
+npm run typecheck
+npm run build
+
+# Extra parser dialect corpus and generated invariant checks.
+npm run test:corpus
+
+# Larger generated graphs and OSV reliability behavior.
+npm run test:stress
+```
+
+The optional `trawly-reliability` workflow can run the corpus and stress layers
+on demand in GitHub Actions.
+
 ## Roadmap
 
 Implemented in this branch:
