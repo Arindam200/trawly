@@ -1,0 +1,11 @@
+{
+  "name": "fixture-yarn-classic",
+  "version": "0.0.1",
+  "dependencies": {
+    "lodash": "^4.17.20",
+    "@scope/sub": "^1.0.0"
+  },
+  "devDependencies": {
+    "minimist": "^1.2.5"
+  }
+}

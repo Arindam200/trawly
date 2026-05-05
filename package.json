@@ -1,6 +1,6 @@
 {
   "name": "trawly",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Dependency sanity scanner for npm projects. Scans installed package versions against OSV and reports known vulnerabilities.",
   "type": "module",
   "license": "Apache-2.0",
@@ -45,10 +45,12 @@
   ],
   "dependencies": {
     "commander": "^12.1.0",
+    "js-yaml": "^4.1.1",
     "kleur": "^4.1.5",
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.14.0",
     "tsup": "^8.3.0",
     "tsx": "^4.19.0",

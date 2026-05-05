@@ -1,6 +1,8 @@
 import { existsSync, statSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { basename, resolve, join } from "node:path";
 import { parseNpmPackageLock } from "./extractors/npm-package-lock.js";
+import { parsePnpmLock } from "./extractors/pnpm-lock.js";
+import { parseYarnLock } from "./extractors/yarn-lock.js";
 import { queryOsv } from "./sources/osv.js";
 import { SEVERITY_RANK } from "./types.js";
 import type {
@@ -23,7 +25,7 @@ export async function scanProject(
 
   if (!lockfilePath) {
     throw new ScanInputError(
-      `No npm lockfile found in ${cwd}. Pass --lockfile or run in a directory with package-lock.json.`,
+      `No supported lockfile found in ${cwd}. Pass --lockfile or run in a directory with package-lock.json, pnpm-lock.yaml, or yarn.lock.`,
     );
   }
 
@@ -47,7 +49,7 @@ export async function scanLockfile(
     throw new ScanInputError(`Lockfile path is not a file: ${lockfilePath}`);
   }
 
-  const allInstances = parseNpmPackageLock(lockfilePath);
+  const allInstances = parseLockfile(lockfilePath);
   const instances = filterInstances(allInstances, options);
   const errors: ScanError[] = [];
 
@@ -79,9 +81,31 @@ export class ScanInputError extends Error {
   }
 }
 
+const LOCKFILE_CANDIDATES = [
+  "pnpm-lock.yaml",
+  "yarn.lock",
+  "package-lock.json",
+  "npm-shrinkwrap.json",
+] as const;
+
 function detectLockfile(cwd: string): string | undefined {
-  const candidate = join(cwd, "package-lock.json");
-  return existsSync(candidate) ? candidate : undefined;
+  for (const file of LOCKFILE_CANDIDATES) {
+    const candidate = join(cwd, file);
+    if (existsSync(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+function parseLockfile(lockfilePath: string): PackageInstance[] {
+  const name = basename(lockfilePath);
+  if (name === "pnpm-lock.yaml") return parsePnpmLock(lockfilePath);
+  if (name === "yarn.lock") return parseYarnLock(lockfilePath);
+  if (name === "package-lock.json" || name === "npm-shrinkwrap.json") {
+    return parseNpmPackageLock(lockfilePath);
+  }
+  throw new ScanInputError(
+    `Unsupported lockfile name: ${name}. Supported: package-lock.json, npm-shrinkwrap.json, pnpm-lock.yaml, yarn.lock.`,
+  );
 }
 
 function filterInstances(

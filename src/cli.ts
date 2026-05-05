@@ -82,7 +82,10 @@ program
     "Scan a project and gate on findings. Exits non-zero when --fail-on is met. Use `inspect` for a log-only run.",
   )
   .argument("[path]", "Project directory to scan", ".")
-  .option("--lockfile <path>", "Explicit path to package-lock.json")
+  .option(
+    "--lockfile <path>",
+    "Explicit path to a lockfile (package-lock.json, pnpm-lock.yaml, or yarn.lock)",
+  )
   .option(
     "--format <format>",
     "Output format: table | json",
@@ -116,7 +119,10 @@ program
     "Scan a project and print findings without gating. Always exits 0 unless an operational error occurs. Use `scan` for CI gating.",
   )
   .argument("[path]", "Project directory to scan", ".")
-  .option("--lockfile <path>", "Explicit path to package-lock.json")
+  .option(
+    "--lockfile <path>",
+    "Explicit path to a lockfile (package-lock.json, pnpm-lock.yaml, or yarn.lock)",
+  )
   .option(
     "--format <format>",
     "Output format: table | json",
