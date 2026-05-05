@@ -1,4 +1,5 @@
-import type { Finding, PackageInstance, Severity } from "../types.js";
+import { fingerprintFinding, packageKey } from "../fingerprint.js";
+import type { Ecosystem, Finding, PackageInstance, Severity } from "../types.js";
 
 const OSV_QUERYBATCH_URL = "https://api.osv.dev/v1/querybatch";
 const OSV_VULN_URL = "https://api.osv.dev/v1/vulns";
@@ -7,7 +8,10 @@ const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_RETRIES = 2;
 
 interface OsvQueryBatchResponse {
-  results: Array<{ vulns?: Array<{ id: string; modified?: string }> }>;
+  results: Array<{
+    vulns?: Array<{ id: string; modified?: string }>;
+    next_page_token?: string;
+  }>;
 }
 
 interface OsvSeverity {
@@ -21,13 +25,15 @@ interface OsvAffectedRange {
 }
 
 interface OsvAffectedPackage {
-  package?: { ecosystem?: string; name?: string };
+  package?: { ecosystem?: string; name?: string; purl?: string };
   ranges?: OsvAffectedRange[];
   versions?: string[];
+  ecosystem_specific?: { severity?: string };
 }
 
 interface OsvVulnDetail {
   id: string;
+  aliases?: string[];
   summary?: string;
   details?: string;
   references?: Array<{ type?: string; url?: string }>;
@@ -43,6 +49,8 @@ export interface OsvQueryDeps {
 interface UniquePackage {
   name: string;
   version: string;
+  ecosystem?: Ecosystem;
+  purl?: string;
 }
 
 /**
@@ -54,10 +62,18 @@ export function dedupeForQuery(
   const seen = new Set<string>();
   const out: UniquePackage[] = [];
   for (const pkg of packages) {
-    const key = `${pkg.name}@${pkg.version}`;
+    const key = packageKey(pkg);
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ name: pkg.name, version: pkg.version });
+    if (pkg.purl) out.push({ name: pkg.name, version: pkg.version, purl: pkg.purl });
+    else if (pkg.ecosystem === "npm") out.push({ name: pkg.name, version: pkg.version });
+    else {
+      out.push({
+        name: pkg.name,
+        version: pkg.version,
+        ecosystem: pkg.ecosystem,
+      });
+    }
   }
   return out;
 }
@@ -76,26 +92,7 @@ export async function queryOsv(
 
   const idsByPackage = new Map<string, Set<string>>();
   for (const chunk of chunked(unique, QUERY_CHUNK_SIZE)) {
-    const body = {
-      queries: chunk.map((q) => ({
-        package: { ecosystem: "npm", name: q.name },
-        version: q.version,
-      })),
-    };
-    const res = await postJson<OsvQueryBatchResponse>(
-      fetchImpl,
-      OSV_QUERYBATCH_URL,
-      body,
-    );
-    res.results.forEach((result, i) => {
-      const q = chunk[i];
-      if (!q) return;
-      const key = `${q.name}@${q.version}`;
-      if (!result.vulns || result.vulns.length === 0) return;
-      const ids = idsByPackage.get(key) ?? new Set<string>();
-      for (const v of result.vulns) ids.add(v.id);
-      idsByPackage.set(key, ids);
-    });
+    await queryBatchWithPagination(fetchImpl, chunk, idsByPackage);
   }
 
   const allIds = new Set<string>();
@@ -118,7 +115,7 @@ export async function queryOsv(
 
   const findings: Finding[] = [];
   for (const pkg of packages) {
-    const key = `${pkg.name}@${pkg.version}`;
+    const key = packageKey(pkg);
     const ids = idsByPackage.get(key);
     if (!ids) continue;
     for (const id of ids) {
@@ -129,6 +126,59 @@ export async function queryOsv(
   return findings;
 }
 
+async function queryBatchWithPagination(
+  fetchImpl: typeof fetch,
+  initial: UniquePackage[],
+  idsByPackage: Map<string, Set<string>>,
+): Promise<void> {
+  let pending = initial;
+  const pageTokens = new Map<string, string>();
+
+  while (pending.length > 0) {
+    const res = await postJson<OsvQueryBatchResponse>(
+      fetchImpl,
+      OSV_QUERYBATCH_URL,
+      { queries: pending.map((q) => toOsvQuery(q, pageTokens.get(queryKey(q)))) },
+    );
+
+    const next: UniquePackage[] = [];
+    res.results.forEach((result, i) => {
+      const q = pending[i];
+      if (!q) return;
+      const key = queryKey(q);
+      if (result.vulns && result.vulns.length > 0) {
+        const ids = idsByPackage.get(key) ?? new Set<string>();
+        for (const v of result.vulns) ids.add(v.id);
+        idsByPackage.set(key, ids);
+      }
+      if (result.next_page_token) {
+        pageTokens.set(key, result.next_page_token);
+        next.push(q);
+      } else {
+        pageTokens.delete(key);
+      }
+    });
+    pending = next;
+  }
+}
+
+function toOsvQuery(
+  q: UniquePackage,
+  pageToken: string | undefined,
+): Record<string, unknown> {
+  const query = q.purl
+    ? { package: { purl: q.purl } }
+    : {
+        package: { ecosystem: q.ecosystem ?? "npm", name: q.name },
+        version: q.version,
+      };
+  return pageToken ? { ...query, page_token: pageToken } : query;
+}
+
+function queryKey(q: UniquePackage): string {
+  return q.purl ?? `${q.ecosystem ?? "npm"}:${q.name}@${q.version}`;
+}
+
 function buildFinding(
   pkg: PackageInstance,
   id: string,
@@ -136,17 +186,31 @@ function buildFinding(
 ): Finding {
   const severity = detail ? parseSeverity(detail) : "unknown";
   const summary = detail?.summary ?? detail?.details ?? id;
+  const aliases = detail?.aliases ?? [];
+  const fingerprint = fingerprintFinding({
+    source: "osv",
+    type: "vulnerability",
+    id,
+    ecosystem: pkg.ecosystem,
+    packageName: pkg.name,
+    installedVersion: pkg.version,
+  });
   return {
     id,
     source: "osv",
     type: "vulnerability",
     severity,
+    ecosystem: pkg.ecosystem,
     packageName: pkg.name,
     installedVersion: pkg.version,
     summary: truncate(summary, 240),
     url: pickAdvisoryUrl(detail) ?? `https://osv.dev/vulnerability/${id}`,
     fixedVersions: detail ? collectFixedVersions(detail, pkg.name) : [],
     affectedPaths: [pkg.path],
+    fingerprint,
+    aliases,
+    sourceFile: pkg.sourceFile,
+    line: pkg.line,
   };
 }
 
@@ -162,6 +226,19 @@ export function parseSeverity(detail: OsvVulnDetail): Severity {
     return dbSpecific;
   }
   if (dbSpecific === "medium") return "moderate";
+
+  for (const aff of detail.affected ?? []) {
+    const ecosystemSeverity = aff.ecosystem_specific?.severity?.toLowerCase();
+    if (
+      ecosystemSeverity === "critical" ||
+      ecosystemSeverity === "high" ||
+      ecosystemSeverity === "moderate" ||
+      ecosystemSeverity === "low"
+    ) {
+      return ecosystemSeverity;
+    }
+    if (ecosystemSeverity === "medium") return "moderate";
+  }
 
   const cvss = detail.severity?.find((s) => s.type?.startsWith("CVSS_"));
   if (cvss) {

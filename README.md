@@ -1,9 +1,11 @@
 # trawly
 
-A dependency sanity scanner for JavaScript projects. Reads exact installed
-versions from your `package-lock.json` and queries the
+A dependency sanity scanner for JavaScript projects and SBOMs. Reads exact
+installed versions from npm, pnpm, and Yarn lockfiles, or from SPDX/CycloneDX
+Package URLs, and queries the
 [OSV](https://google.github.io/osv.dev/api/) advisory database for known
-vulnerabilities.
+vulnerabilities. It can also flag lightweight supply-chain risk signals such as
+install scripts, unexpected registries, and unusually new packages.
 
 > **Limitation:** trawly reports known advisories. It cannot prove a package is
 > safe : absence of findings is not absence of risk.
@@ -27,11 +29,19 @@ npx trawly inspect
 # gating run : exits non-zero when findings meet --fail-on (default: high). Use this in CI.
 npx trawly scan
 
-# scan a specific lockfile
+# scan specific lockfiles or SBOMs
 npx trawly scan --lockfile path/to/package-lock.json
+npx trawly scan --lockfile pnpm-lock.yaml --lockfile yarn.lock
+npx trawly scan --sbom bom.cdx.json --sbom bom.spdx.json
 
-# JSON output (stable schema, suitable for CI artefacts)
+# machine-readable output
 npx trawly scan --format json > trawly-report.json
+npx trawly scan --format sarif --output trawly.sarif
+npx trawly scan --format markdown --output trawly.md
+
+# fail only on findings absent from a saved baseline
+npx trawly scan --baseline trawly-baseline.json
+npx trawly inspect --write-baseline trawly-baseline.json
 
 # only production deps
 npx trawly scan --prod
@@ -59,8 +69,15 @@ trawly inspect [path]   Log-only run. Always exits 0 on findings.
 
 Common options (both commands):
 
-  --lockfile <path>          Explicit path to package-lock.json
-  --format table|json        Output format (default: table)
+  --lockfile <path>          Explicit lockfile path; may be repeated
+  --sbom <path>              Explicit SPDX/CycloneDX SBOM path; may be repeated
+  --format table|json|markdown|sarif
+                             Output format (default: table)
+  --output <path>            Write report output to a file
+  --config <path>            Path to trawly.toml
+  --baseline <path>          Mark existing findings and fail only on new ones
+  --write-baseline <path>    Write the current active findings baseline
+  --risk / --no-risk         Enable or disable risk signals
   --prod                     Skip dev dependencies
   --include-dev              Include dev dependencies (default)
   --no-cache                 Bypass any local cache
@@ -104,14 +121,18 @@ The result follows this shape:
       "source": "osv",
       "type": "vulnerability",
       "severity": "high",
+      "ecosystem": "npm",
       "packageName": "lodash",
       "installedVersion": "4.17.20",
       "summary": "Prototype pollution in lodash",
       "url": "https://github.com/advisories/GHSA-...",
       "fixedVersions": ["4.17.21"],
       "affectedPaths": ["node_modules/lodash"],
+      "fingerprint": "sha256...",
+      "aliases": ["CVE-..."],
     },
   ],
+  "ignoredFindings": [],
   "summary": {
     "critical": 0,
     "high": 1,
@@ -120,8 +141,29 @@ The result follows this shape:
     "unknown": 0,
   },
   "errors": [],
+  "warnings": [],
 }
 ```
+
+## Config
+
+trawly auto-discovers `trawly.toml` in the scanned project, or you can pass
+`--config`.
+
+```toml
+failOn = "high"
+risk = true
+allowedRegistries = ["https://registry.npmjs.org", "https://registry.yarnpkg.com"]
+
+[[ignore]]
+id = "GHSA-example"
+package = "lodash"
+ecosystem = "npm"
+expires = "2026-06-30"
+reason = "Not reachable in our app"
+```
+
+Every ignore entry must include an expiry date.
 
 ## CI example (GitHub Actions)
 
@@ -131,20 +173,27 @@ on: [push, pull_request]
 jobs:
   scan:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 20 }
-      - run: npm ci
-      - run: npx trawly scan --fail-on high --format json > trawly.json
+      - uses: actions/checkout@v6
+      - uses: Arindam200/trawly@main
+        with:
+          fail-on: high
+          upload-sarif: "true"
       - uses: actions/upload-artifact@v4
         if: always()
-        with: { name: trawly-report, path: trawly.json }
+        with:
+          name: trawly-report
+          path: |
+            trawly.sarif
+            trawly.md
 ```
 
 ## Roadmap
 
-trawly v0 covers npm + OSV. Planned next:
+Implemented in this branch:
 
 - pnpm and Yarn lockfile support
 - SARIF + Markdown reporters and a GitHub Action
@@ -152,4 +201,3 @@ trawly v0 covers npm + OSV. Planned next:
 - Baseline mode (fail only on new findings)
 - Risk signals: install scripts, unexpected registries, package age
 - Multi-ecosystem scanning via SBOM (SPDX, CycloneDX)
-

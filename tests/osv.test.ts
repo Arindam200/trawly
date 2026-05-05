@@ -188,4 +188,105 @@ describe("queryOsv", () => {
       expect(f.url).toBe("https://example.com/advisory");
     }
   });
+
+  it("queries PURLs without a top-level version and carries aliases", async () => {
+    const calls: Array<{ url: string; body?: unknown }> = [];
+    const purlPkg: PackageInstance = {
+      name: "django",
+      version: "4.2.0",
+      ecosystem: "PyPI",
+      path: "sbom:django",
+      direct: false,
+      dev: false,
+      optional: false,
+      purl: "pkg:pypi/django@4.2.0",
+    };
+
+    const fakeFetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      const url = typeof input === "string" ? input : input.toString();
+      calls.push({ url, body: init?.body });
+      if (url.endsWith("/v1/querybatch")) {
+        return new Response(
+          JSON.stringify({ results: [{ vulns: [{ id: "PYSEC-1" }] }] }),
+          { status: 200 },
+        );
+      }
+      if (url.endsWith("/v1/vulns/PYSEC-1")) {
+        return new Response(
+          JSON.stringify({
+            id: "PYSEC-1",
+            aliases: ["CVE-2026-0001"],
+            summary: "Django issue",
+            database_specific: { severity: "MEDIUM" },
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response("not found", { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const findings = await queryOsv([purlPkg], { fetchImpl: fakeFetch });
+    const body = JSON.parse(String(calls[0]?.body)) as {
+      queries: Array<{ version?: string; package: { purl?: string } }>;
+    };
+
+    expect(body.queries[0]).toEqual({
+      package: { purl: "pkg:pypi/django@4.2.0" },
+    });
+    expect(findings[0]).toMatchObject({
+      aliases: ["CVE-2026-0001"],
+      ecosystem: "PyPI",
+      severity: "moderate",
+    });
+    expect(findings[0]?.fingerprint).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("follows querybatch pagination", async () => {
+    let page = 0;
+    const fakeFetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/v1/querybatch")) {
+        page++;
+        const body = JSON.parse(String(init?.body)) as {
+          queries: Array<{ page_token?: string }>;
+        };
+        if (page === 1) {
+          return new Response(
+            JSON.stringify({
+              results: [
+                {
+                  vulns: [{ id: "GHSA-page-1" }],
+                  next_page_token: "next",
+                },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+        expect(body.queries[0]?.page_token).toBe("next");
+        return new Response(
+          JSON.stringify({
+            results: [{ vulns: [{ id: "GHSA-page-2" }] }],
+          }),
+          { status: 200 },
+        );
+      }
+      const id = decodeURIComponent(url.split("/v1/vulns/")[1] ?? "");
+      return new Response(JSON.stringify({ id, summary: id }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const findings = await queryOsv([pkg("lodash", "4.17.20")], {
+      fetchImpl: fakeFetch,
+    });
+    expect(findings.map((f) => f.id).sort()).toEqual([
+      "GHSA-page-1",
+      "GHSA-page-2",
+    ]);
+  });
 });

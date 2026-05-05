@@ -52,6 +52,8 @@ export function reportTable(
 ): string {
   const view: TableView = options.view ?? (options.details ? "details" : "grouped");
   const lines: string[] = [];
+  const warnings = result.warnings ?? [];
+  const ignoredFindings = result.ignoredFindings ?? [];
 
   if (options.brand) {
     const { metricsLine, timestamp } = headerParts(result);
@@ -67,9 +69,26 @@ export function reportTable(
       );
     }
   }
+  if (warnings.length > 0) {
+    for (const warning of warnings) {
+      lines.push(kleur.yellow(`~ ${warning}`));
+    }
+  }
+  if (ignoredFindings.length > 0) {
+    lines.push(
+      kleur.gray(`${ignoredFindings.length} finding(s) ignored by config.`),
+    );
+  }
+  if (result.baseline) {
+    lines.push(
+      kleur.gray(
+        `Baseline: ${result.baseline.new} new, ${result.baseline.existing} existing.`,
+      ),
+    );
+  }
 
   if (result.findings.length === 0) {
-    lines.push(kleur.green("✓ No known advisories found."));
+    lines.push(kleur.green("✓ No active findings. No known advisories found."));
     lines.push(
       kleur.gray(
         "  Note: this only checks known advisories. It cannot prove a package is safe.",

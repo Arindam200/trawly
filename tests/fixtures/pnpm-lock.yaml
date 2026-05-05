@@ -1,0 +1,28 @@
+lockfileVersion: '9.0'
+
+importers:
+  .:
+    dependencies:
+      axios:
+        specifier: ^1.6.0
+        version: 1.6.7
+    devDependencies:
+      vitest:
+        specifier: ^2.0.0
+        version: 2.1.9
+
+packages:
+  axios@1.6.7:
+    resolution:
+      integrity: sha512-axios
+      tarball: https://registry.npmjs.org/axios/-/axios-1.6.7.tgz
+    requiresBuild: true
+  vitest@2.1.9:
+    resolution:
+      integrity: sha512-vitest
+      tarball: https://registry.npmjs.org/vitest/-/vitest-2.1.9.tgz
+    dev: true
+  '@scope/pkg@1.0.0':
+    resolution:
+      integrity: sha512-scope
+      tarball: https://registry.npmjs.org/@scope/pkg/-/pkg-1.0.0.tgz

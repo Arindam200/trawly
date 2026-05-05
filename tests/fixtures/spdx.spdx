@@ -1,0 +1,9 @@
+SPDXVersion: SPDX-2.3
+DataLicense: CC0-1.0
+SPDXID: SPDXRef-DOCUMENT
+DocumentName: fixture
+
+PackageName: lodash
+SPDXID: SPDXRef-Package-lodash
+PackageVersion: 4.17.20
+ExternalRef: PACKAGE-MANAGER purl pkg:npm/lodash@4.17.20

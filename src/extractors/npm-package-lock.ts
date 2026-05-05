@@ -6,6 +6,7 @@ interface NpmLockEntry {
   version?: string;
   resolved?: string;
   integrity?: string;
+  hasInstallScript?: boolean;
   dev?: boolean;
   devOptional?: boolean;
   optional?: boolean;
@@ -75,8 +76,14 @@ export function parseNpmPackageLock(filePath: string): PackageInstance[] {
       direct: directDeps.has(name) && isTopLevelInstance(path),
       dev: Boolean(entry.dev || entry.devOptional),
       optional: Boolean(entry.optional || entry.devOptional),
+      inputKind: "lockfile",
+      sourceFile: absolute,
+      line: lineOf(raw, JSON.stringify(path)),
+      manager: "npm",
       resolved: entry.resolved,
       integrity: entry.integrity,
+      registry: registryFromResolved(entry.resolved),
+      hasInstallScript: Boolean(entry.hasInstallScript),
     });
   }
 
@@ -124,4 +131,20 @@ function isTopLevelInstance(path: string): boolean {
   const first = path.indexOf("node_modules/");
   if (first === -1) return false;
   return path.indexOf("node_modules/", first + 1) === -1;
+}
+
+function registryFromResolved(resolved: string | undefined): string | undefined {
+  if (!resolved) return undefined;
+  try {
+    const url = new URL(resolved);
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function lineOf(raw: string, needle: string): number | undefined {
+  const idx = raw.indexOf(needle);
+  if (idx === -1) return undefined;
+  return raw.slice(0, idx).split(/\r?\n/).length;
 }
