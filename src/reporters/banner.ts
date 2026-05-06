@@ -1,7 +1,7 @@
 import kleur from "kleur";
 
 export interface BannerProps {
-  /** First content row, e.g. "164 packages · 2 vulnerable · 2 advisories". */
+  /** First content row, e.g. "164 packages · 2 affected · 2 findings". */
   metrics: string;
   /** Second content row, typically a scannedAt ISO timestamp. */
   timestamp: string;

@@ -1,222 +1,247 @@
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import yaml from "js-yaml";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { parse as parseYaml } from "yaml";
+import * as yarnClassicModule from "@yarnpkg/lockfile";
 import type { PackageInstance } from "../types.js";
+import { readPackageJsonInfoFrom } from "./package-json.js";
 
-interface YarnEntry {
+const yarnClassic = (
+  "parse" in yarnClassicModule
+    ? yarnClassicModule
+    : (yarnClassicModule as { default: typeof yarnClassicModule }).default
+) as { parse(input: string): { type: string; object: Record<string, unknown> } };
+
+interface YarnClassicEntry {
+  version?: string;
+  resolved?: string;
+  integrity?: string;
+  optionalDependencies?: Record<string, string>;
+}
+
+interface YarnBerryEntry {
+  version?: string;
+  resolution?: string;
+  checksum?: string;
+  languageName?: string;
+  linkType?: string;
+}
+
+const LOCAL_YARN_PROTOCOLS = ["workspace:", "patch:", "portal:", "file:"];
+
+export interface ParsedYarnClassicEntry {
   specs: string[];
   fields: Record<string, string>;
 }
 
-interface BerryEntry {
-  version?: string;
-  resolution?: string;
-  checksum?: string;
-  // language and linker keys are ignored
-}
-
-/**
- * Parse a yarn lockfile (classic v1 or berry v2+) and return one
- * PackageInstance per resolved entry.
- *
- * Direct/dev flags are inferred by reading the sibling package.json,
- * since yarn lockfiles don't carry that information themselves.
- */
 export function parseYarnLock(filePath: string): PackageInstance[] {
   const absolute = resolve(filePath);
-  const content = readFileSync(absolute, "utf8");
-  const projectDir = dirname(absolute);
-  const directs = readDirectDepsFromPackageJson(projectDir);
-  const isBerry = /^__metadata:/m.test(content);
-  return isBerry
-    ? parseBerry(absolute, content, directs)
-    : parseClassic(absolute, content, directs);
+  const raw = readFileSync(absolute, "utf8");
+  return isBerryLock(raw)
+    ? parseYarnBerryLock(absolute, raw)
+    : parseYarnClassicLock(absolute, raw);
 }
 
-interface DirectSets {
-  prod: Set<string>;
-  dev: Set<string>;
-  optional: Set<string>;
-  any: Set<string>;
-}
-
-function readDirectDepsFromPackageJson(projectDir: string): DirectSets {
-  const result: DirectSets = {
-    prod: new Set(),
-    dev: new Set(),
-    optional: new Set(),
-    any: new Set(),
-  };
-  const pkgPath = join(projectDir, "package.json");
-  if (!existsSync(pkgPath)) return result;
-  try {
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as {
-      dependencies?: Record<string, string>;
-      devDependencies?: Record<string, string>;
-      optionalDependencies?: Record<string, string>;
-      peerDependencies?: Record<string, string>;
-    };
-    for (const name of Object.keys(pkg.dependencies ?? {})) result.prod.add(name);
-    for (const name of Object.keys(pkg.devDependencies ?? {})) result.dev.add(name);
-    for (const name of Object.keys(pkg.optionalDependencies ?? {}))
-      result.optional.add(name);
-    for (const set of [result.prod, result.dev, result.optional]) {
-      for (const n of set) result.any.add(n);
-    }
-    for (const name of Object.keys(pkg.peerDependencies ?? {})) result.any.add(name);
-  } catch {
-    // malformed package.json: leave sets empty
-  }
-  return result;
-}
-
-// ---------- yarn classic v1 ----------
-
-function parseClassic(
+export function parseYarnClassicLock(
   absolute: string,
-  content: string,
-  directs: DirectSets,
+  raw: string,
 ): PackageInstance[] {
-  const entries = parseClassicEntries(content);
+  const parsed = yarnClassic.parse(raw);
+  if (parsed.type === "conflict") {
+    throw new Error(`Yarn lockfile ${absolute} contains merge conflicts.`);
+  }
+  const rootInfo = readPackageJsonInfoFrom(absolute);
   const instances: PackageInstance[] = [];
-  for (const entry of entries) {
-    const version = entry.fields.version;
-    if (!version) continue;
-    const names = uniq(entry.specs.map((s) => parseYarnSpec(s).name).filter(Boolean));
-    const name = names[0];
+  for (const [descriptor, value] of Object.entries(parsed.object)) {
+    if (!isRecord(value)) continue;
+    const entry = value as YarnClassicEntry;
+    if (!entry.version) continue;
+    const name = parseYarnDescriptorName(descriptor);
     if (!name) continue;
-    const isDirect = names.some((n) => directs.any.has(n));
-    const inProd = names.some((n) => directs.prod.has(n));
-    const inDev = names.some((n) => directs.dev.has(n));
-    const inOpt = names.some((n) => directs.optional.has(n));
+    const direct = rootInfo.allDirect.has(name);
     instances.push({
       name,
-      version,
+      version: entry.version,
       ecosystem: "npm",
-      path: `${name}@${version}`,
-      direct: isDirect,
-      dev: inDev && !inProd,
-      optional: inOpt && !inProd && !inDev,
-      resolved: entry.fields.resolved,
-      integrity: entry.fields.integrity,
+      path: descriptor,
+      direct,
+      dev: direct ? rootInfo.devDependencies.has(name) : false,
+      optional: direct ? rootInfo.optionalDependencies.has(name) : false,
+      inputKind: "lockfile",
+      sourceFile: absolute,
+      line: lineOf(raw, descriptor),
+      manager: "yarn",
+      resolved: entry.resolved,
+      integrity: entry.integrity,
+      registry: registryFromResolved(entry.resolved),
+      hasInstallScript: false,
     });
   }
-  void absolute;
-  return instances;
+  return dedupeInstances(instances);
 }
 
-export function parseClassicEntries(content: string): YarnEntry[] {
-  const lines = content.split(/\r?\n/);
-  const entries: YarnEntry[] = [];
-  let current: YarnEntry | null = null;
-  for (const rawLine of lines) {
-    if (rawLine === "" || rawLine.trimStart().startsWith("#")) continue;
-    if (!/^\s/.test(rawLine)) {
-      // Header line ending with ":"
-      if (current) entries.push(current);
-      const header = rawLine.replace(/:\s*$/, "");
-      current = { specs: splitClassicSpecs(header), fields: {} };
-      continue;
-    }
-    if (!current) continue;
-    // Top-level field for this entry has indent of exactly 2 spaces.
-    const indent = rawLine.match(/^ +/)?.[0].length ?? 0;
-    if (indent !== 2) continue;
-    const trimmed = rawLine.trim();
-    const m =
-      trimmed.match(/^([^\s"]+)\s+"((?:[^"\\]|\\.)*)"$/) ??
-      trimmed.match(/^([^\s"]+)\s+(\S+)$/);
-    if (m && m[1] !== undefined && m[2] !== undefined) {
-      current.fields[m[1]] = m[2];
-    }
-  }
-  if (current) entries.push(current);
-  return entries;
-}
-
-function splitClassicSpecs(header: string): string[] {
-  const out: string[] = [];
-  let cur = "";
-  let inQuote = false;
-  for (const ch of header) {
-    if (ch === '"') {
-      inQuote = !inQuote;
-      continue;
-    }
-    if (ch === "," && !inQuote) {
-      const spec = cur.trim();
-      if (spec) out.push(spec);
-      cur = "";
-      continue;
-    }
-    cur += ch;
-  }
-  const last = cur.trim();
-  if (last) out.push(last);
-  return out;
-}
-
-// ---------- yarn berry (v2+) ----------
-
-function parseBerry(
+export function parseYarnBerryLock(
   absolute: string,
-  content: string,
-  directs: DirectSets,
+  raw: string,
 ): PackageInstance[] {
-  let parsed: Record<string, BerryEntry | unknown>;
+  let parsed: Record<string, unknown>;
   try {
-    parsed = (yaml.load(content) ?? {}) as Record<string, BerryEntry | unknown>;
+    parsed = parseYaml(raw) as Record<string, unknown>;
   } catch (err) {
     throw new Error(
       `Failed to parse ${absolute}: ${(err as Error).message}`,
     );
   }
+  const rootInfo = readPackageJsonInfoFrom(absolute);
   const instances: PackageInstance[] = [];
-  for (const [key, value] of Object.entries(parsed)) {
-    if (key === "__metadata") continue;
-    if (!value || typeof value !== "object") continue;
-    const entry = value as BerryEntry;
+  for (const [descriptor, value] of Object.entries(parsed)) {
+    if (descriptor === "__metadata" || !isRecord(value)) continue;
+    const entry = value as YarnBerryEntry;
     if (!entry.version) continue;
-    const specs = splitClassicSpecs(key);
-    const names = uniq(specs.map((s) => parseYarnSpec(s).name).filter(Boolean));
-    const name = names[0];
+    const resolution = entry.resolution ?? descriptor;
+    if (hasLocalYarnProtocol(resolution) || hasLocalYarnProtocol(descriptor)) {
+      continue;
+    }
+    const name =
+      parseYarnDescriptorName(resolution) ?? parseYarnDescriptorName(descriptor);
     if (!name) continue;
-    const isDirect = names.some((n) => directs.any.has(n));
-    const inProd = names.some((n) => directs.prod.has(n));
-    const inDev = names.some((n) => directs.dev.has(n));
-    const inOpt = names.some((n) => directs.optional.has(n));
+    const direct = rootInfo.allDirect.has(name);
     instances.push({
       name,
       version: entry.version,
       ecosystem: "npm",
-      path: `${name}@${entry.version}`,
-      direct: isDirect,
-      dev: inDev && !inProd,
-      optional: inOpt && !inProd && !inDev,
-      resolved: entry.resolution,
+      path: descriptor,
+      direct,
+      dev: direct ? rootInfo.devDependencies.has(name) : false,
+      optional: direct ? rootInfo.optionalDependencies.has(name) : false,
+      inputKind: "lockfile",
+      sourceFile: absolute,
+      line: lineOf(raw, descriptor),
+      manager: "yarn",
       integrity: entry.checksum,
+      hasInstallScript: false,
     });
   }
-  return instances;
+  return dedupeInstances(instances);
 }
 
-// ---------- shared ----------
+function hasLocalYarnProtocol(value: string): boolean {
+  const normalized = value.trim().replace(/^"|"$/g, "");
+  return LOCAL_YARN_PROTOCOLS.some(
+    (protocol) =>
+      normalized.startsWith(protocol) || normalized.includes(`@${protocol}`),
+  );
+}
 
-/**
- * "lodash@^4.17.20" -> { name: "lodash", selector: "^4.17.20" }
- * "@scope/foo@^1.0.0" -> { name: "@scope/foo", selector: "^1.0.0" }
- * Berry: "lodash@npm:^4.17.20" -> { name: "lodash", selector: "^4.17.20" }
- */
+export function parseClassicEntries(raw: string): ParsedYarnClassicEntry[] {
+  const entries: ParsedYarnClassicEntry[] = [];
+  let current: ParsedYarnClassicEntry | null = null;
+
+  for (const line of raw.split(/\r?\n/)) {
+    if (line === "" || line.trimStart().startsWith("#")) continue;
+    if (!/^\s/.test(line)) {
+      if (current) entries.push(current);
+      current = {
+        specs: splitClassicSpecs(line.replace(/:\s*$/, "")),
+        fields: {},
+      };
+      continue;
+    }
+    if (!current) continue;
+    const indent = line.match(/^ +/)?.[0].length ?? 0;
+    if (indent !== 2) continue;
+    const trimmed = line.trim();
+    const match =
+      /^([^\s"]+)\s+"((?:[^"\\]|\\.)*)"$/.exec(trimmed) ??
+      /^([^\s"]+)\s+(\S+)$/.exec(trimmed);
+    if (!match) continue;
+    current.fields[match[1]!] = match[2]!;
+  }
+
+  if (current) entries.push(current);
+  return entries;
+}
+
+export function parseYarnDescriptorName(descriptor: string): string | null {
+  const first = descriptor.split(",")[0]?.trim().replace(/^"|"$/g, "");
+  if (!first) return null;
+  for (const marker of ["@npm:", "@patch:", "@workspace:", "@portal:", "@file:"]) {
+    const idx = first.lastIndexOf(marker);
+    if (idx > 0) return first.slice(0, idx);
+  }
+  if (first.startsWith("@")) {
+    const slash = first.indexOf("/");
+    if (slash === -1) return null;
+    const at = first.indexOf("@", slash + 1);
+    return at === -1 ? first : first.slice(0, at);
+  }
+  const at = first.indexOf("@");
+  return at === -1 ? first : first.slice(0, at);
+}
+
 export function parseYarnSpec(spec: string): { name: string; selector: string } {
-  const startSearch = spec.startsWith("@") ? 1 : 0;
-  const atIdx = spec.indexOf("@", startSearch);
-  if (atIdx <= 0) return { name: spec, selector: "" };
-  const name = spec.slice(0, atIdx);
-  let selector = spec.slice(atIdx + 1);
+  const normalized = spec.trim().replace(/^"|"$/g, "");
+  const startSearch = normalized.startsWith("@") ? 1 : 0;
+  const at = normalized.indexOf("@", startSearch);
+  if (at <= 0) return { name: normalized, selector: "" };
+  let selector = normalized.slice(at + 1);
   if (selector.startsWith("npm:")) selector = selector.slice(4);
-  return { name, selector };
+  return { name: normalized.slice(0, at), selector };
 }
 
-function uniq(values: string[]): string[] {
-  return Array.from(new Set(values));
+function splitClassicSpecs(header: string): string[] {
+  const specs: string[] = [];
+  let current = "";
+  let quoted = false;
+  for (const char of header) {
+    if (char === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (char === "," && !quoted) {
+      const spec = current.trim();
+      if (spec) specs.push(spec);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  const tail = current.trim();
+  if (tail) specs.push(tail);
+  return specs;
+}
+
+function isBerryLock(raw: string): boolean {
+  return raw.includes("__metadata:") || raw.includes("cacheKey:");
+}
+
+function dedupeInstances(instances: PackageInstance[]): PackageInstance[] {
+  const seen = new Set<string>();
+  const out: PackageInstance[] = [];
+  for (const instance of instances) {
+    const key = `${instance.name}@${instance.version}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(instance);
+  }
+  return out;
+}
+
+function registryFromResolved(resolved: string | undefined): string | undefined {
+  if (!resolved) return undefined;
+  try {
+    const url = new URL(resolved);
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function lineOf(raw: string, needle: string): number | undefined {
+  const idx = raw.indexOf(needle);
+  if (idx === -1) return undefined;
+  return raw.slice(0, idx).split(/\r?\n/).length;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

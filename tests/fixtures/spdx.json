@@ -1,0 +1,17 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "packages": [
+    {
+      "name": "lodash",
+      "SPDXID": "SPDXRef-Package-lodash",
+      "versionInfo": "4.17.20",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/lodash@4.17.20"
+        }
+      ]
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 {
   "name": "trawly",
-  "version": "0.0.2",
-  "description": "Dependency sanity scanner for npm projects. Scans installed package versions against OSV and reports known vulnerabilities.",
+  "version": "0.1.0",
+  "description": "Dependency and SBOM security scanner for JavaScript projects, with OSV advisories, SARIF reports, baselines, and risk signals.",
   "type": "module",
   "license": "Apache-2.0",
   "engines": {
@@ -28,6 +28,9 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "test": "vitest run",
+    "test:corpus": "vitest run tests/corpus-edge-cases.test.ts tests/property-generated.test.ts",
+    "test:differential": "TRAWLY_DIFFERENTIAL=1 vitest run tests/differential-package-managers.test.ts",
+    "test:stress": "TRAWLY_STRESS=1 vitest run tests/stress-reliability.test.ts",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "scan": "node --import tsx/esm src/cli.ts scan",
@@ -44,13 +47,16 @@
     "audit"
   ],
   "dependencies": {
+    "@yarnpkg/lockfile": "^1.1.0",
     "commander": "^12.1.0",
-    "js-yaml": "^4.1.1",
+    "fast-xml-parser": "^5.7.3",
     "kleur": "^4.1.5",
+    "packageurl-js": "^2.0.1",
+    "smol-toml": "^1.6.1",
+    "yaml": "^2.8.4",
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.14.0",
     "tsup": "^8.3.0",
     "tsx": "^4.19.0",

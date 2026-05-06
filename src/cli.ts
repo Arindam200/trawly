@@ -1,6 +1,9 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { Command, InvalidArgumentError } from "commander";
 import kleur from "kleur";
 import { reportAdd, runAdd } from "./commands/add.js";
+import { ConfigError, loadConfig } from "./config.js";
 import { envIssuesMeetThreshold, scanEnv } from "./env-scan.js";
 import {
   buildInstallCommand,
@@ -11,9 +14,12 @@ import {
 import { runPackageManager } from "./installer/runner.js";
 import { reportEnvJson, reportEnvTable } from "./reporters/env-table.js";
 import { reportJson } from "./reporters/json.js";
+import { reportMarkdown } from "./reporters/markdown.js";
+import { reportSarif } from "./reporters/sarif.js";
 import { reportTable } from "./reporters/table.js";
 import { meetsThreshold, ScanInputError, scanProject } from "./scanner.js";
 import type { FailOnLevel } from "./types.js";
+import { TRAWLY_VERSION } from "./version.js";
 
 const FAIL_ON_VALUES: FailOnLevel[] = [
   "critical",
@@ -22,8 +28,10 @@ const FAIL_ON_VALUES: FailOnLevel[] = [
   "low",
   "none",
 ];
-const FORMAT_VALUES = ["table", "json"] as const;
+const FORMAT_VALUES = ["table", "json", "markdown", "sarif"] as const;
 type Format = (typeof FORMAT_VALUES)[number];
+const ENV_FORMAT_VALUES = ["table", "json"] as const;
+type EnvFormat = (typeof ENV_FORMAT_VALUES)[number];
 
 const PM_VALUES: PackageManager[] = ["npm", "pnpm", "yarn", "bun"];
 
@@ -52,6 +60,15 @@ function parseFormat(value: string): Format {
   return value as Format;
 }
 
+function parseEnvFormat(value: string): EnvFormat {
+  if (!ENV_FORMAT_VALUES.includes(value as EnvFormat)) {
+    throw new InvalidArgumentError(
+      `must be one of: ${ENV_FORMAT_VALUES.join(", ")}`,
+    );
+  }
+  return value as EnvFormat;
+}
+
 function parsePm(value: string): PackageManager {
   if (!PM_VALUES.includes(value as PackageManager)) {
     throw new InvalidArgumentError(`must be one of: ${PM_VALUES.join(", ")}`);
@@ -59,7 +76,10 @@ function parsePm(value: string): PackageManager {
   return value as PackageManager;
 }
 
-const TRAWLY_VERSION = "0.1.0";
+function collectOption(value: string, previous: string[] = []): string[] {
+  previous.push(value);
+  return previous;
+}
 
 const program = new Command();
 
@@ -86,11 +106,13 @@ program
   .argument("[path]", "Project directory to scan", ".")
   .option(
     "--lockfile <path>",
-    "Explicit path to a lockfile (package-lock.json, pnpm-lock.yaml, or yarn.lock)",
+    "Explicit lockfile path. May be repeated.",
+    collectOption,
   )
+  .option("--sbom <path>", "Explicit SPDX/CycloneDX SBOM path. May be repeated.", collectOption)
   .option(
     "--format <format>",
-    "Output format: table | json",
+    "Output format: table | json | markdown | sarif",
     parseFormat,
     "table" as Format,
   )
@@ -98,8 +120,15 @@ program
     "--fail-on <level>",
     `Exit non-zero when a finding meets this severity (${FAIL_ON_VALUES.join("|")})`,
     parseFailOn,
-    "high" as FailOnLevel,
   )
+  .option("--config <path>", "Path to trawly.toml")
+  .option("--baseline <path>", "Only fail on findings not present in this baseline")
+  .option("--write-baseline <path>", "Write the current active findings baseline")
+  .option("--output <path>", "Write report output to a file")
+  .option("--risk", "Enable risk signals")
+  .option("--no-risk", "Disable risk signals")
+  .option("--env", "Scan committed .env files for secret-like values")
+  .option("--no-env", "Disable committed .env file scanning")
   .option("--prod", "Only scan production dependencies (excludes dev)")
   .option("--include-dev", "Include dev dependencies (default)")
   .option("--no-cache", "Bypass any local cache")
@@ -111,8 +140,10 @@ program
     "-q, --summary",
     "Show only the one-line severity summary. Mutually exclusive with --details.",
   )
-  .action(async (path: string, opts: ScanCliOptions) => {
-    await runScanCommand(path, opts, { gate: true });
+  .action(async (path: string, opts: ScanCliOptions, command: Command) => {
+    await runScanCommand(path, normalizeScanOptions(opts, command), {
+      gate: true,
+    });
   });
 
 program
@@ -123,14 +154,24 @@ program
   .argument("[path]", "Project directory to scan", ".")
   .option(
     "--lockfile <path>",
-    "Explicit path to a lockfile (package-lock.json, pnpm-lock.yaml, or yarn.lock)",
+    "Explicit lockfile path. May be repeated.",
+    collectOption,
   )
+  .option("--sbom <path>", "Explicit SPDX/CycloneDX SBOM path. May be repeated.", collectOption)
   .option(
     "--format <format>",
-    "Output format: table | json",
+    "Output format: table | json | markdown | sarif",
     parseFormat,
     "table" as Format,
   )
+  .option("--config <path>", "Path to trawly.toml")
+  .option("--baseline <path>", "Mark findings already present in this baseline")
+  .option("--write-baseline <path>", "Write the current active findings baseline")
+  .option("--output <path>", "Write report output to a file")
+  .option("--risk", "Enable risk signals")
+  .option("--no-risk", "Disable risk signals")
+  .option("--env", "Scan committed .env files for secret-like values")
+  .option("--no-env", "Disable committed .env file scanning")
   .option("--prod", "Only scan production dependencies (excludes dev)")
   .option("--include-dev", "Include dev dependencies (default)")
   .option("--no-cache", "Bypass any local cache")
@@ -142,10 +183,13 @@ program
     "-q, --summary",
     "Show only the one-line severity summary. Mutually exclusive with --details.",
   )
-  .action(async (path: string, opts: InspectCliOptions) => {
+  .action(async (path: string, opts: InspectCliOptions, command: Command) => {
     await runScanCommand(
       path,
-      { ...opts, failOn: "none" as FailOnLevel },
+      {
+        ...normalizeScanOptions(opts, command),
+        failOn: "none" as FailOnLevel,
+      },
       { gate: false },
     );
   });
@@ -224,8 +268,8 @@ program
   .option(
     "--format <format>",
     "Output format: table | json",
-    parseFormat,
-    "table" as Format,
+    parseEnvFormat,
+    "table" as EnvFormat,
   )
   .option(
     "--fail-on <level>",
@@ -267,9 +311,16 @@ program
   });
 
 interface ScanCliOptions {
-  lockfile?: string;
+  lockfile?: string[];
+  sbom?: string[];
   format: Format;
-  failOn: FailOnLevel;
+  failOn?: FailOnLevel;
+  config?: string;
+  baseline?: string;
+  writeBaseline?: string;
+  output?: string;
+  risk?: boolean;
+  env?: boolean;
   prod?: boolean;
   includeDev?: boolean;
   cache?: boolean;
@@ -286,8 +337,28 @@ interface AddCliOptions {
 }
 
 interface EnvCliOptions {
-  format: Format;
+  format: EnvFormat;
   failOn: FailOnLevel;
+}
+
+function normalizeScanOptions<T extends ScanCliOptions | InspectCliOptions>(
+  opts: T,
+  command: Command,
+): T {
+  return {
+    ...opts,
+    risk: triStateBooleanFlag(command, "risk"),
+    env: triStateBooleanFlag(command, "env"),
+  };
+}
+
+function triStateBooleanFlag(
+  command: Command,
+  name: "risk" | "env",
+): boolean | undefined {
+  return command.getOptionValueSource(name) === "cli"
+    ? (command.getOptionValue(name) as boolean)
+    : undefined;
 }
 
 async function runEnvCommand(
@@ -335,32 +406,33 @@ async function runScanCommand(
   }
 
   try {
+    const cwd = resolve(path);
+    const config = loadConfig(cwd, opts.config).config;
+    const failOn = opts.failOn ?? config.failOn ?? ("high" as FailOnLevel);
     const result = await scanProject({
-      cwd: path,
+      cwd,
       lockfile: opts.lockfile,
+      sbom: opts.sbom,
+      config: opts.config,
+      baseline: opts.baseline,
+      writeBaseline: opts.writeBaseline,
+      risk: opts.risk,
+      env: opts.env,
       includeDev: opts.includeDev,
       prodOnly: opts.prod,
       cache: opts.cache,
     });
 
-    if (opts.format === "json") {
-      process.stdout.write(`${reportJson(result)}\n`);
-    } else {
-      const view = opts.summary
-        ? "summary"
-        : opts.details
-          ? "details"
-          : "grouped";
-      const brand = process.stdout.isTTY === true;
-      process.stdout.write(`${reportTable(result, { view, brand })}\n`);
-    }
+    const output = renderReport(result, opts);
+    if (opts.output) writeOutput(cwd, opts.output, output);
+    else process.stdout.write(`${output}\n`);
 
     if (result.errors.length > 0) {
       process.exit(EXIT.operational);
     }
 
     if (!gate) {
-      if (opts.format !== "json" && result.findings.length > 0) {
+      if (opts.format === "table" && !opts.output && result.findings.length > 0) {
         process.stdout.write(
           `${kleur.gray(
             "ℹ inspect mode: exiting 0 regardless of findings. Run `trawly scan` to gate CI.",
@@ -370,11 +442,11 @@ async function runScanCommand(
       process.exit(EXIT.ok);
     }
 
-    if (meetsThreshold(result.findings, opts.failOn)) {
+    if (meetsThreshold(result.findings, failOn)) {
       if (opts.format !== "json") {
         process.stderr.write(
           `${kleur.red(
-            `× Failing because at least one finding meets --fail-on=${opts.failOn}.`,
+            `× Failing because at least one finding meets --fail-on=${failOn}.`,
           )}\n${kleur.gray(
             "  Run `trawly inspect` to log without exiting non-zero, or `trawly scan --fail-on=none` to disable the gate.",
           )}\n`,
@@ -384,7 +456,7 @@ async function runScanCommand(
     }
     process.exit(EXIT.ok);
   } catch (err) {
-    if (err instanceof ScanInputError) {
+    if (err instanceof ScanInputError || err instanceof ConfigError) {
       printErr(err.message);
       process.exit(EXIT.invalidInput);
     }
@@ -426,6 +498,35 @@ function splitArgs(args: string[]): { specs: string[]; flags: string[] } {
 
 function printErr(msg: string): void {
   process.stderr.write(`${kleur.red(msg)}\n`);
+}
+
+function renderReport(
+  result: Awaited<ReturnType<typeof scanProject>>,
+  opts: ScanCliOptions,
+): string {
+  switch (opts.format) {
+    case "json":
+      return reportJson(result);
+    case "markdown":
+      return reportMarkdown(result);
+    case "sarif":
+      return reportSarif(result);
+    case "table": {
+      const view = opts.summary
+        ? "summary"
+        : opts.details
+          ? "details"
+          : "grouped";
+      const brand = process.stdout.isTTY === true && !opts.output;
+      return reportTable(result, { view, brand });
+    }
+  }
+}
+
+function writeOutput(cwd: string, path: string, content: string): void {
+  const absolute = resolve(cwd, path);
+  mkdirSync(dirname(absolute), { recursive: true });
+  writeFileSync(absolute, `${content}\n`);
 }
 
 await program.parseAsync(process.argv);

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import {
   parseYarnLock,
   parseYarnSpec,
@@ -88,5 +90,48 @@ describe("parseYarnLock — berry", () => {
     expect(lodash.direct).toBe(true);
     expect(lodash.dev).toBe(false);
     expect(minimist.dev).toBe(true);
+  });
+
+  it("skips local workspace, patch, portal, and file locators", () => {
+    const dir = mkdtempSync(join(tmpdir(), "trawly-yarn-"));
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({
+        dependencies: {
+          local: "workspace:.",
+          patched: "patch:patched@npm:1.0.0#./patched.patch",
+          portal: "portal:../portal",
+          filedep: "file:../filedep",
+        },
+      }),
+    );
+    const lockfile = join(dir, "yarn.lock");
+    writeFileSync(
+      lockfile,
+      [
+        "__metadata:",
+        "  version: 6",
+        "  cacheKey: 10",
+        "",
+        '"local@workspace:.":',
+        "  version: 0.0.0-use.local",
+        '  resolution: "local@workspace:."',
+        "",
+        '"patched@patch:patched@npm%3A1.0.0#./patched.patch":',
+        "  version: 1.0.0",
+        '  resolution: "patched@patch:patched@npm%3A1.0.0#./patched.patch"',
+        "",
+        '"portal@portal:../portal":',
+        "  version: 0.0.0-use.local",
+        '  resolution: "portal@portal:../portal"',
+        "",
+        '"filedep@file:../filedep":',
+        "  version: 0.0.0-use.local",
+        '  resolution: "filedep@file:../filedep"',
+        "",
+      ].join("\n"),
+    );
+
+    expect(parseYarnLock(lockfile)).toEqual([]);
   });
 });

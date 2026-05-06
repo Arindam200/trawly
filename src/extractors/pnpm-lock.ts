@@ -1,37 +1,35 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import yaml from "js-yaml";
+import { parse as parseYaml } from "yaml";
 import type { PackageInstance } from "../types.js";
+import { readPackageJsonInfoFrom } from "./package-json.js";
 
 interface PnpmDepRef {
-  specifier?: string;
   version?: string;
-}
-
-type PnpmImporterDeps = Record<string, string | PnpmDepRef>;
-
-interface PnpmImporter {
-  dependencies?: PnpmImporterDeps;
-  devDependencies?: PnpmImporterDeps;
-  optionalDependencies?: PnpmImporterDeps;
+  specifier?: string;
 }
 
 interface PnpmPackageEntry {
   resolution?: { integrity?: string; tarball?: string };
-  name?: string;
-  version?: string;
   dev?: boolean;
   optional?: boolean;
+  requiresBuild?: boolean;
 }
 
 interface PnpmLockfile {
-  lockfileVersion?: number | string;
-  importers?: Record<string, PnpmImporter>;
+  lockfileVersion?: string | number;
+  importers?: Record<
+    string,
+    {
+      dependencies?: Record<string, string | PnpmDepRef>;
+      devDependencies?: Record<string, string | PnpmDepRef>;
+      optionalDependencies?: Record<string, string | PnpmDepRef>;
+    }
+  >;
   packages?: Record<string, PnpmPackageEntry>;
-  // v6 root-level deps when no importers section
-  dependencies?: PnpmImporterDeps;
-  devDependencies?: PnpmImporterDeps;
-  optionalDependencies?: PnpmImporterDeps;
+  dependencies?: Record<string, string | PnpmDepRef>;
+  devDependencies?: Record<string, string | PnpmDepRef>;
+  optionalDependencies?: Record<string, string | PnpmDepRef>;
 }
 
 const SUPPORTED_MAJOR_VERSIONS = new Set([6, 9]);
@@ -41,121 +39,134 @@ export function parsePnpmLock(filePath: string): PackageInstance[] {
   const raw = readFileSync(absolute, "utf8");
   let parsed: PnpmLockfile;
   try {
-    parsed = (yaml.load(raw) ?? {}) as PnpmLockfile;
+    parsed = parseYaml(raw) as PnpmLockfile;
   } catch (err) {
     throw new Error(
       `Failed to parse ${absolute}: ${(err as Error).message}`,
     );
   }
 
-  const versionRaw = parsed.lockfileVersion;
-  const major = parseLockfileMajor(versionRaw);
+  const major = parseLockfileMajor(parsed.lockfileVersion);
   if (major === null || !SUPPORTED_MAJOR_VERSIONS.has(major)) {
     throw new Error(
-      `Unsupported pnpm lockfileVersion ${String(versionRaw)} in ${absolute}. Supported: 6.x, 9.x.`,
+      `Unsupported pnpm lockfileVersion ${String(parsed.lockfileVersion)} in ${absolute}. Supported: 6.x, 9.x.`,
     );
   }
 
-  const packages = parsed.packages;
-  if (!packages || typeof packages !== "object") {
-    throw new Error(
-      `Lockfile ${absolute} has no "packages" map; cannot extract installed versions.`,
-    );
+  if (!parsed.packages || typeof parsed.packages !== "object") {
+    throw new Error(`Lockfile ${absolute} has no "packages" map.`);
   }
 
-  const importers = parsed.importers ?? {
-    ".": {
-      dependencies: parsed.dependencies,
-      devDependencies: parsed.devDependencies,
-      optionalDependencies: parsed.optionalDependencies,
-    },
-  };
+  const rootInfo = readPackageJsonInfoFrom(absolute);
+  const importerDirect = collectImporterDirect(parsed);
+  const directDeps =
+    importerDirect.all.size > 0 ? importerDirect.all : rootInfo.allDirect;
+  const devDeps =
+    importerDirect.dev.size > 0 ? importerDirect.dev : rootInfo.devDependencies;
+  const optionalDeps =
+    importerDirect.optional.size > 0
+      ? importerDirect.optional
+      : rootInfo.optionalDependencies;
 
-  const direct = collectDirectFromImporters(importers);
   const instances: PackageInstance[] = [];
-
-  for (const [key, entry] of Object.entries(packages)) {
-    const parsed = parsePnpmPackageKey(key);
-    if (!parsed) continue;
-    const name = entry.name ?? parsed.name;
-    const version = entry.version ?? parsed.version;
-    if (!name || !version) continue;
-
-    const isDirect = direct.prod.has(name) || direct.dev.has(name) || direct.optional.has(name);
-    const onlyDev = direct.dev.has(name) && !direct.prod.has(name);
-    const onlyOptional =
-      direct.optional.has(name) && !direct.prod.has(name) && !direct.dev.has(name);
-
+  for (const [key, entry] of Object.entries(parsed.packages)) {
+    const parsedKey = parsePnpmPackageKey(key);
+    if (!parsedKey) continue;
+    const direct = directDeps.has(parsedKey.name);
     instances.push({
-      name,
-      version,
+      name: parsedKey.name,
+      version: parsedKey.version,
       ecosystem: "npm",
       path: key,
-      direct: isDirect,
-      dev: Boolean(entry.dev) || onlyDev,
-      optional: Boolean(entry.optional) || onlyOptional,
+      direct,
+      dev: direct ? devDeps.has(parsedKey.name) : Boolean(entry.dev),
+      optional: direct
+        ? optionalDeps.has(parsedKey.name)
+        : Boolean(entry.optional),
+      inputKind: "lockfile",
+      sourceFile: absolute,
+      line: lineOf(raw, key),
+      manager: "pnpm",
       resolved: entry.resolution?.tarball,
       integrity: entry.resolution?.integrity,
+      registry: registryFromResolved(entry.resolution?.tarball),
+      hasInstallScript: Boolean(entry.requiresBuild),
     });
   }
-
   return instances;
+}
+
+export function parsePnpmPackageKey(
+  key: string,
+): { name: string; version: string } | null {
+  let normalized = key.replace(/^\/+/, "");
+  const peerStart = normalized.indexOf("(");
+  if (peerStart !== -1) normalized = normalized.slice(0, peerStart);
+  normalized = normalized.split("_")[0] ?? normalized;
+  const at = normalized.lastIndexOf("@");
+  if (at <= 0) return null;
+  const name = normalized.slice(0, at);
+  const version = normalized.slice(at + 1);
+  if (!name || !version) return null;
+  return { name, version };
+}
+
+function collectImporterDirect(lock: PnpmLockfile): {
+  all: Set<string>;
+  dev: Set<string>;
+  optional: Set<string>;
+} {
+  const all = new Set<string>();
+  const dev = new Set<string>();
+  const optional = new Set<string>();
+  const importers = lock.importers ?? {
+    ".": {
+      dependencies: lock.dependencies,
+      devDependencies: lock.devDependencies,
+      optionalDependencies: lock.optionalDependencies,
+    },
+  };
+  for (const importer of Object.values(importers)) {
+    addKeys(importer.dependencies, all);
+    addKeys(importer.devDependencies, all, dev);
+    addKeys(importer.optionalDependencies, all, optional);
+  }
+  return { all, dev, optional };
 }
 
 function parseLockfileMajor(value: unknown): number | null {
   if (typeof value === "number") return Math.trunc(value);
   if (typeof value === "string") {
-    const num = parseInt(value, 10);
-    return Number.isNaN(num) ? null : num;
+    const major = Number.parseInt(value, 10);
+    return Number.isNaN(major) ? null : major;
   }
   return null;
 }
 
-interface DirectSets {
-  prod: Set<string>;
-  dev: Set<string>;
-  optional: Set<string>;
-}
-
-function collectDirectFromImporters(
-  importers: Record<string, PnpmImporter>,
-): DirectSets {
-  const prod = new Set<string>();
-  const dev = new Set<string>();
-  const optional = new Set<string>();
-  for (const importer of Object.values(importers)) {
-    if (!importer) continue;
-    addDepNames(importer.dependencies, prod);
-    addDepNames(importer.devDependencies, dev);
-    addDepNames(importer.optionalDependencies, optional);
+function addKeys(
+  value: Record<string, string | PnpmDepRef> | undefined,
+  all: Set<string>,
+  bucket?: Set<string>,
+): void {
+  if (!value) return;
+  for (const name of Object.keys(value)) {
+    all.add(name);
+    bucket?.add(name);
   }
-  return { prod, dev, optional };
 }
 
-function addDepNames(block: PnpmImporterDeps | undefined, into: Set<string>): void {
-  if (!block) return;
-  for (const name of Object.keys(block)) into.add(name);
+function registryFromResolved(resolved: string | undefined): string | undefined {
+  if (!resolved) return undefined;
+  try {
+    const url = new URL(resolved);
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return undefined;
+  }
 }
 
-/**
- * pnpm v9: "lodash@4.17.21", "@scope/foo@1.2.3", "vitest@2.0.0(peer)"
- * pnpm v6: "/lodash@4.17.21", "/@scope/foo@1.2.3", "/vitest@2.0.0(peer)"
- */
-export function parsePnpmPackageKey(
-  key: string,
-): { name: string; version: string } | null {
-  let working = key.startsWith("/") ? key.slice(1) : key;
-  // Strip peer-deps suffix (everything from the first paren onward).
-  const parenIdx = working.indexOf("(");
-  if (parenIdx !== -1) working = working.slice(0, parenIdx);
-
-  // Find the @ separating name from version. For scoped names (@scope/foo@x.y.z)
-  // we must skip the leading @.
-  const startSearch = working.startsWith("@") ? 1 : 0;
-  const atIdx = working.indexOf("@", startSearch);
-  if (atIdx <= 0) return null;
-  const name = working.slice(0, atIdx);
-  const version = working.slice(atIdx + 1);
-  if (!name || !version) return null;
-  return { name, version };
+function lineOf(raw: string, needle: string): number | undefined {
+  const idx = raw.indexOf(needle);
+  if (idx === -1) return undefined;
+  return raw.slice(0, idx).split(/\r?\n/).length;
 }
