@@ -5,6 +5,7 @@ export type Ecosystem = string;
 export type FindingType =
   | "vulnerability"
   | "malware"
+  | "secret"
   | "risk-signal"
   | "integrity";
 
@@ -117,6 +118,7 @@ export interface ScanProjectOptions {
   baseline?: string;
   writeBaseline?: string;
   risk?: boolean;
+  env?: boolean;
   allowedRegistries?: string[];
   includeDev?: boolean;
   prodOnly?: boolean;
@@ -133,6 +135,7 @@ export interface ScanLockfileOptions {
   baseline?: string;
   writeBaseline?: string;
   risk?: boolean;
+  env?: boolean;
   allowedRegistries?: string[];
   includeDev?: boolean;
   prodOnly?: boolean;

@@ -29,6 +29,10 @@ inputs:
     description: Upload SARIF to GitHub code scanning.
     required: false
     default: "true"
+  env-scan:
+    description: Scan committed .env files for secret-like values.
+    required: false
+    default: "true"
 runs:
   using: composite
   steps:
@@ -60,6 +64,11 @@ runs:
       run: |
         set +e
         args=(scan "${{ inputs.path }}" --fail-on "${{ inputs.fail-on }}")
+        if [[ "${{ inputs.env-scan }}" == "true" ]]; then
+          args+=(--env)
+        else
+          args+=(--no-env)
+        fi
         if [[ -n "${{ inputs.config }}" ]]; then
           args+=(--config "${{ inputs.config }}")
         fi
@@ -69,6 +78,11 @@ runs:
         node "$GITHUB_ACTION_PATH/dist/cli.js" "${args[@]}" --format sarif --output "${{ steps.output-paths.outputs.sarif }}"
         status=$?
         inspect_args=(inspect "${{ inputs.path }}")
+        if [[ "${{ inputs.env-scan }}" == "true" ]]; then
+          inspect_args+=(--env)
+        else
+          inspect_args+=(--no-env)
+        fi
         if [[ -n "${{ inputs.config }}" ]]; then
           inspect_args+=(--config "${{ inputs.config }}")
         fi

@@ -39,6 +39,9 @@ npx trawly scan --format json > trawly-report.json
 npx trawly scan --format sarif --output trawly.sarif
 npx trawly scan --format markdown --output trawly.md
 
+# include committed .env-file checks
+npx trawly scan --env
+
 # fail only on findings absent from a saved baseline
 npx trawly scan --baseline trawly-baseline.json
 npx trawly inspect --write-baseline trawly-baseline.json
@@ -78,6 +81,7 @@ Common options (both commands):
   --baseline <path>          Mark existing findings and fail only on new ones
   --write-baseline <path>    Write the current active findings baseline
   --risk / --no-risk         Enable or disable risk signals
+  --env / --no-env           Enable or disable committed .env file scanning
   --prod                     Skip dev dependencies
   --include-dev              Include dev dependencies (default)
   --no-cache                 Bypass any local cache
@@ -182,6 +186,7 @@ jobs:
         with:
           fail-on: high
           upload-sarif: "true"
+          env-scan: "true"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

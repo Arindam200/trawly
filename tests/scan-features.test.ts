@@ -10,10 +10,12 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { applyBaseline, writeBaseline } from "../src/baseline.js";
 import { ConfigError, loadConfig } from "../src/config.js";
+import { scanEnvFiles } from "../src/env.js";
 import { applyIgnores } from "../src/ignore.js";
 import { reportMarkdown } from "../src/reporters/markdown.js";
 import { reportSarif } from "../src/reporters/sarif.js";
 import { collectRiskSignals } from "../src/risk.js";
+import { scanProject } from "../src/scanner.js";
 import type { Finding, PackageInstance, ScanResult } from "../src/types.js";
 
 function tempDir(): string {
@@ -170,6 +172,58 @@ describe("risk signals", () => {
       "TRAWLY-NEW-PACKAGE",
       "TRAWLY-NEW-VERSION",
       "TRAWLY-UNEXPECTED-REGISTRY",
+    ]);
+  });
+});
+
+describe("env scanning", () => {
+  it("flags committed env files and secret-like keys without exposing values", () => {
+    const dir = tempDir();
+    const secretValue = "super-secret-value-123";
+    writeFileSync(
+      join(dir, ".env"),
+      [
+        "PUBLIC_URL=https://example.com",
+        `DATABASE_URL=${secretValue}`,
+        "API_KEY=changeme",
+      ].join("\n"),
+    );
+    writeFileSync(join(dir, ".env.example"), "DATABASE_URL=example\n");
+
+    const out = scanEnvFiles(dir);
+
+    expect(out.filesScanned).toBe(1);
+    expect(out.findings.map((f) => f.id).sort()).toEqual([
+      "TRAWLY-ENV-FILE",
+      "TRAWLY-ENV-SECRET",
+    ]);
+    expect(out.findings.find((f) => f.id === "TRAWLY-ENV-SECRET")).toMatchObject({
+      severity: "high",
+      packageName: "DATABASE_URL",
+      line: 2,
+    });
+    expect(JSON.stringify(out)).not.toContain(secretValue);
+  });
+
+  it("can run env-only scans when explicitly enabled", async () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, ".env.local"), "TOKEN=live-token-value\n");
+
+    const out = await scanProject({
+      cwd: dir,
+      env: true,
+      risk: false,
+      fetchImpl: (async () =>
+        new Response(JSON.stringify({ results: [] }), {
+          status: 200,
+        })) as typeof fetch,
+    });
+
+    expect(out.errors).toEqual([]);
+    expect(out.packagesScanned).toBe(0);
+    expect(out.findings.map((f) => f.id).sort()).toEqual([
+      "TRAWLY-ENV-FILE",
+      "TRAWLY-ENV-SECRET",
     ]);
   });
 });

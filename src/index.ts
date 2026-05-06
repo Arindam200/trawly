@@ -12,6 +12,7 @@ export { parsePnpmLock, parsePnpmPackageKey } from "./extractors/pnpm-lock.js";
 export { parseYarnLock, parseYarnDescriptorName } from "./extractors/yarn-lock.js";
 export { parseLockfile } from "./extractors/lockfile.js";
 export { parseSbom, parsePurlPackage } from "./extractors/sbom.js";
+export { scanEnvFiles } from "./env.js";
 export { queryOsv, dedupeForQuery } from "./sources/osv.js";
 export { loadConfig, ConfigError } from "./config.js";
 export { SEVERITY_RANK } from "./types.js";

@@ -115,6 +115,8 @@ program
   .option("--output <path>", "Write report output to a file")
   .option("--risk", "Enable risk signals")
   .option("--no-risk", "Disable risk signals")
+  .option("--env", "Scan committed .env files for secret-like values")
+  .option("--no-env", "Disable committed .env file scanning")
   .option("--prod", "Only scan production dependencies (excludes dev)")
   .option("--include-dev", "Include dev dependencies (default)")
   .option("--no-cache", "Bypass any local cache")
@@ -154,6 +156,8 @@ program
   .option("--output <path>", "Write report output to a file")
   .option("--risk", "Enable risk signals")
   .option("--no-risk", "Disable risk signals")
+  .option("--env", "Scan committed .env files for secret-like values")
+  .option("--no-env", "Disable committed .env file scanning")
   .option("--prod", "Only scan production dependencies (excludes dev)")
   .option("--include-dev", "Include dev dependencies (default)")
   .option("--no-cache", "Bypass any local cache")
@@ -277,6 +281,7 @@ interface ScanCliOptions {
   writeBaseline?: string;
   output?: string;
   risk?: boolean;
+  env?: boolean;
   prod?: boolean;
   includeDev?: boolean;
   cache?: boolean;
@@ -318,6 +323,7 @@ async function runScanCommand(
       baseline: opts.baseline,
       writeBaseline: opts.writeBaseline,
       risk: opts.risk,
+      env: opts.env,
       includeDev: opts.includeDev,
       prodOnly: opts.prod,
       cache: opts.cache,

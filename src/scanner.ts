@@ -2,6 +2,7 @@ import { existsSync, statSync } from "node:fs";
 import { dirname, resolve, join } from "node:path";
 import { applyBaseline, writeBaseline } from "./baseline.js";
 import { loadConfig } from "./config.js";
+import { scanEnvFiles } from "./env.js";
 import { parseLockfile } from "./extractors/lockfile.js";
 import { parseSbom } from "./extractors/sbom.js";
 import { applyIgnores } from "./ignore.js";
@@ -32,8 +33,9 @@ export async function scanProject(
     ? normalizePaths(cwd, options.lockfile)
     : detectLockfiles(cwd);
   const sbomPaths = normalizePaths(cwd, options.sbom);
+  const envEnabled = options.env ?? false;
 
-  if (lockfilePaths.length === 0 && sbomPaths.length === 0) {
+  if (lockfilePaths.length === 0 && sbomPaths.length === 0 && !envEnabled) {
     throw new ScanInputError(
       `No supported lockfile or SBOM found in ${cwd}. Pass --lockfile/--sbom or run in a directory with package-lock.json, pnpm-lock.yaml, or yarn.lock.`,
     );
@@ -47,6 +49,7 @@ export async function scanProject(
     baseline: options.baseline,
     writeBaseline: options.writeBaseline,
     risk: options.risk ?? loadedConfig.config.risk,
+    env: envEnabled,
     allowedRegistries:
       options.allowedRegistries ?? loadedConfig.config.allowedRegistries,
     includeDev: options.includeDev,
@@ -75,10 +78,14 @@ export async function scanLockfile(
   const instances = filterInstances(allInstances, options);
   const errors: ScanError[] = [];
   const warnings: string[] = [];
+  const envResult = options.env
+    ? scanEnvFiles(cwd)
+    : { findings: [], warnings: [], filesScanned: 0 };
+  warnings.push(...envResult.warnings);
 
-  let findings: Finding[] = [];
+  let findings: Finding[] = [...envResult.findings];
   try {
-    findings = await queryOsv(instances, { fetchImpl: options.fetchImpl });
+    findings.push(...(await queryOsv(instances, { fetchImpl: options.fetchImpl })));
   } catch (err) {
     errors.push({
       message: "Failed to query OSV advisory database",
