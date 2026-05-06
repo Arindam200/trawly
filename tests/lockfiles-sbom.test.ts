@@ -17,16 +17,16 @@ const fixtures = join(here, "fixtures");
 describe("parsePnpmLock", () => {
   it("extracts packages, direct/dev flags, registry, and build script signal", () => {
     const instances = parsePnpmLock(join(fixtures, "pnpm-lock.yaml"));
-    const axios = instances.find((i) => i.name === "axios")!;
-    const vitest = instances.find((i) => i.name === "vitest")!;
-    const scoped = instances.find((i) => i.name === "@scope/pkg")!;
+    const lodash = instances.find((i) => i.name === "lodash")!;
+    const minimist = instances.find((i) => i.name === "minimist")!;
+    const scoped = instances.find((i) => i.name === "@scope/sub")!;
 
-    expect(axios.version).toBe("1.6.7");
-    expect(axios.direct).toBe(true);
-    expect(axios.hasInstallScript).toBe(true);
-    expect(axios.registry).toBe("https://registry.npmjs.org");
-    expect(vitest.dev).toBe(true);
-    expect(scoped.direct).toBe(false);
+    expect(lodash.version).toBe("4.17.20");
+    expect(lodash.direct).toBe(true);
+    expect(lodash.hasInstallScript).toBe(true);
+    expect(lodash.registry).toBe("https://registry.npmjs.org");
+    expect(minimist.dev).toBe(true);
+    expect(scoped.direct).toBe(true);
   });
 
   it("parses scoped pnpm package keys", () => {
@@ -52,8 +52,10 @@ describe("parseYarnLock", () => {
   it("parses Yarn Berry lockfiles", () => {
     const instances = parseYarnLock(join(fixtures, "yarn-berry", "yarn.lock"));
     expect(instances.map((i) => i.name).sort()).toEqual([
-      "@scope/pkg",
+      "@scope/sub",
       "lodash",
+      "minimist",
+      "safe-buffer",
     ]);
   });
 

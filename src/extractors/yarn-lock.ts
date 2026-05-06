@@ -26,6 +26,11 @@ interface YarnBerryEntry {
   linkType?: string;
 }
 
+export interface ParsedYarnClassicEntry {
+  specs: string[];
+  fields: Record<string, string>;
+}
+
 export function parseYarnLock(filePath: string): PackageInstance[] {
   const absolute = resolve(filePath);
   const raw = readFileSync(absolute, "utf8");
@@ -117,6 +122,35 @@ export function parseYarnBerryLock(
   return dedupeInstances(instances);
 }
 
+export function parseClassicEntries(raw: string): ParsedYarnClassicEntry[] {
+  const entries: ParsedYarnClassicEntry[] = [];
+  let current: ParsedYarnClassicEntry | null = null;
+
+  for (const line of raw.split(/\r?\n/)) {
+    if (line === "" || line.trimStart().startsWith("#")) continue;
+    if (!/^\s/.test(line)) {
+      if (current) entries.push(current);
+      current = {
+        specs: splitClassicSpecs(line.replace(/:\s*$/, "")),
+        fields: {},
+      };
+      continue;
+    }
+    if (!current) continue;
+    const indent = line.match(/^ +/)?.[0].length ?? 0;
+    if (indent !== 2) continue;
+    const trimmed = line.trim();
+    const match =
+      /^([^\s"]+)\s+"((?:[^"\\]|\\.)*)"$/.exec(trimmed) ??
+      /^([^\s"]+)\s+(\S+)$/.exec(trimmed);
+    if (!match) continue;
+    current.fields[match[1]!] = match[2]!;
+  }
+
+  if (current) entries.push(current);
+  return entries;
+}
+
 export function parseYarnDescriptorName(descriptor: string): string | null {
   const first = descriptor.split(",")[0]?.trim().replace(/^"|"$/g, "");
   if (!first) return null;
@@ -132,6 +166,38 @@ export function parseYarnDescriptorName(descriptor: string): string | null {
   }
   const at = first.indexOf("@");
   return at === -1 ? first : first.slice(0, at);
+}
+
+export function parseYarnSpec(spec: string): { name: string; selector: string } {
+  const normalized = spec.trim().replace(/^"|"$/g, "");
+  const startSearch = normalized.startsWith("@") ? 1 : 0;
+  const at = normalized.indexOf("@", startSearch);
+  if (at <= 0) return { name: normalized, selector: "" };
+  let selector = normalized.slice(at + 1);
+  if (selector.startsWith("npm:")) selector = selector.slice(4);
+  return { name: normalized.slice(0, at), selector };
+}
+
+function splitClassicSpecs(header: string): string[] {
+  const specs: string[] = [];
+  let current = "";
+  let quoted = false;
+  for (const char of header) {
+    if (char === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (char === "," && !quoted) {
+      const spec = current.trim();
+      if (spec) specs.push(spec);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  const tail = current.trim();
+  if (tail) specs.push(tail);
+  return specs;
 }
 
 function isBerryLock(raw: string): boolean {

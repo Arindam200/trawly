@@ -1,5 +1,5 @@
 {
-  "name": "fixture-yarn-berry",
+  "name": "fixture-yarn-classic",
   "version": "0.0.1",
   "dependencies": {
     "lodash": "^4.17.20",

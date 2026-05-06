@@ -28,7 +28,12 @@ interface PnpmLockfile {
   >;
   packages?: Record<string, PnpmPackageEntry>;
   snapshots?: Record<string, unknown>;
+  dependencies?: Record<string, string | PnpmDepRef>;
+  devDependencies?: Record<string, string | PnpmDepRef>;
+  optionalDependencies?: Record<string, string | PnpmDepRef>;
 }
+
+const SUPPORTED_MAJOR_VERSIONS = new Set([6, 9]);
 
 export function parsePnpmLock(filePath: string): PackageInstance[] {
   const absolute = resolve(filePath);
@@ -39,6 +44,13 @@ export function parsePnpmLock(filePath: string): PackageInstance[] {
   } catch (err) {
     throw new Error(
       `Failed to parse ${absolute}: ${(err as Error).message}`,
+    );
+  }
+
+  const major = parseLockfileMajor(parsed.lockfileVersion);
+  if (major === null || !SUPPORTED_MAJOR_VERSIONS.has(major)) {
+    throw new Error(
+      `Unsupported pnpm lockfileVersion ${String(parsed.lockfileVersion)} in ${absolute}. Supported: 6.x, 9.x.`,
     );
   }
 
@@ -66,7 +78,7 @@ export function parsePnpmLock(filePath: string): PackageInstance[] {
       name: parsedKey.name,
       version: parsedKey.version,
       ecosystem: "npm",
-      path: `packages:${key}`,
+      path: key,
       direct,
       dev: direct ? devDeps.has(parsedKey.name) : Boolean(entry.dev),
       optional: direct
@@ -108,12 +120,28 @@ function collectImporterDirect(lock: PnpmLockfile): {
   const all = new Set<string>();
   const dev = new Set<string>();
   const optional = new Set<string>();
-  for (const importer of Object.values(lock.importers ?? {})) {
+  const importers = lock.importers ?? {
+    ".": {
+      dependencies: lock.dependencies,
+      devDependencies: lock.devDependencies,
+      optionalDependencies: lock.optionalDependencies,
+    },
+  };
+  for (const importer of Object.values(importers)) {
     addKeys(importer.dependencies, all);
     addKeys(importer.devDependencies, all, dev);
     addKeys(importer.optionalDependencies, all, optional);
   }
   return { all, dev, optional };
+}
+
+function parseLockfileMajor(value: unknown): number | null {
+  if (typeof value === "number") return Math.trunc(value);
+  if (typeof value === "string") {
+    const major = Number.parseInt(value, 10);
+    return Number.isNaN(major) ? null : major;
+  }
+  return null;
 }
 
 function addKeys(
