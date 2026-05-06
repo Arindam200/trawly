@@ -7,6 +7,14 @@ export {
   ScanInputError,
 } from "./scanner.js";
 
+export { scanEnv, envIssuesMeetThreshold } from "./env-scan.js";
+export type {
+  EnvIssue,
+  EnvIssueKind,
+  EnvScanResult,
+  EnvScanOptions,
+} from "./env-scan.js";
+
 export { parseNpmPackageLock } from "./extractors/npm-package-lock.js";
 export { parsePnpmLock, parsePnpmPackageKey } from "./extractors/pnpm-lock.js";
 export { parseYarnLock, parseYarnDescriptorName } from "./extractors/yarn-lock.js";
