@@ -221,7 +221,7 @@ function normalizePaths(
 ): string[] {
   if (!value) return [];
   const values = Array.isArray(value) ? value : [value];
-  return values.map((path) => resolve(cwd, path));
+  return [...new Set(values.map((path) => resolve(cwd, path)))];
 }
 
 function validateFile(path: string): void {

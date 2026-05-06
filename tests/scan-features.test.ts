@@ -432,6 +432,36 @@ describe("scanner plumbing", () => {
     expect(out.baseline).toMatchObject({ existing: 1, new: 0 });
     expect(meetsThreshold(out.findings, "high")).toBe(false);
   });
+
+  it("deduplicates equivalent explicit input paths before scanning", async () => {
+    const dir = tempDir();
+    writeFileSync(
+      join(dir, "package-lock.json"),
+      JSON.stringify({
+        lockfileVersion: 3,
+        packages: {
+          "": { dependencies: { lodash: "4.17.20" } },
+          "node_modules/lodash": { version: "4.17.20" },
+        },
+      }),
+    );
+    const querySizes: number[] = [];
+    const fakeFetch = (async (_input: URL | RequestInfo, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { queries: unknown[] };
+      querySizes.push(body.queries.length);
+      return new Response(JSON.stringify({ results: [{}] }), { status: 200 });
+    }) as typeof fetch;
+
+    const out = await scanLockfile({
+      cwd: dir,
+      lockfilePath: ["package-lock.json", "./package-lock.json"],
+      risk: false,
+      fetchImpl: fakeFetch,
+    });
+
+    expect(out.packagesScanned).toBe(1);
+    expect(querySizes).toEqual([1]);
+  });
 });
 
 describe("reporters and CLI output", () => {
