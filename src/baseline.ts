@@ -1,7 +1,11 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { mkdirSync } from "node:fs";
 import type { BaselineFile, BaselineResult, Finding } from "./types.js";
+
+export interface AppliedBaseline {
+  result: BaselineResult;
+  findings: Finding[];
+}
 
 export class BaselineError extends Error {
   constructor(message: string) {
@@ -14,28 +18,30 @@ export function applyBaseline(
   findings: Finding[],
   cwd: string,
   baselinePath?: string,
-): BaselineResult | undefined {
+): AppliedBaseline | undefined {
   if (!baselinePath) return undefined;
   const absolute = resolve(cwd, baselinePath);
   const loaded = readBaseline(absolute);
   const fingerprints = new Set(loaded.findings);
   let existing = 0;
   let fresh = 0;
-  for (const finding of findings) {
+  const marked = findings.map((finding) => {
     if (fingerprints.has(finding.fingerprint)) {
-      finding.baseline = "existing";
       existing++;
-    } else {
-      finding.baseline = "new";
-      fresh++;
+      return { ...finding, baseline: "existing" as const };
     }
-  }
+    fresh++;
+    return { ...finding, baseline: "new" as const };
+  });
   return {
-    path: absolute,
-    loaded: true,
-    total: findings.length,
-    existing,
-    new: fresh,
+    result: {
+      path: absolute,
+      loaded: true,
+      total: findings.length,
+      existing,
+      new: fresh,
+    },
+    findings: marked,
   };
 }
 

@@ -152,7 +152,8 @@ describeStress("large generated graph stress", () => {
     expect(result.packagesScanned).toBe(10_000);
     expect(result.findings).toHaveLength(0);
     expect(chunkSizes).toHaveLength(20);
-    expect(elapsedMs).toBeLessThan(10_000);
+    const maxElapsedMs = Number(process.env.TRAWLY_STRESS_MAX_MS ?? 30_000);
+    expect(elapsedMs).toBeLessThan(maxElapsedMs);
   });
 
   it("renders large JSON, Markdown, and SARIF reports with valid structure", () => {

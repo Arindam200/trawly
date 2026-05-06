@@ -6,6 +6,9 @@ const REGISTRY_ENV = "TRAWLY_NPM_REGISTRY_URL";
 const REQUEST_TIMEOUT_MS = 15_000;
 const NEW_VERSION_DAYS = 30;
 const NEW_PACKAGE_DAYS = 90;
+const PACKUMENT_CONCURRENCY = 8;
+const PACKUMENT_MAX_RETRIES = 3;
+const PACKUMENT_BACKOFF_MS = 250;
 
 export interface RiskOptions {
   enabled: boolean;
@@ -32,11 +35,13 @@ export async function collectRiskSignals(
   const findings: Finding[] = [];
   const warnings: string[] = [];
   for (const pkg of packages) {
-    if (pkg.hasInstallScript) findings.push(riskFinding(pkg, {
-      id: "TRAWLY-INSTALL-SCRIPT",
-      severity: "moderate",
-      summary: `${pkg.name}@${pkg.version} declares install-time scripts or requires a build step.`,
-    }));
+    if (pkg.hasInstallScript) {
+      findings.push(riskFinding(pkg, {
+        id: "TRAWLY-INSTALL-SCRIPT",
+        severity: "moderate",
+        summary: `${pkg.name}@${pkg.version} declares install-time scripts or requires a build step.`,
+      }));
+    }
 
     const registry = normalizeRegistry(pkg.registry);
     if (registry && !isAllowedRegistry(registry, options.allowedRegistries)) {
@@ -48,34 +53,46 @@ export async function collectRiskSignals(
     }
   }
 
-  const npmPackages = dedupeNpmPackages(packages);
+  const npmPackageGroups = groupNpmPackages(packages);
   const fetchImpl = options.fetchImpl ?? fetch;
-  await Promise.all(
-    npmPackages.map(async (pkg) => {
+  await mapWithConcurrency(
+    npmPackageGroups,
+    PACKUMENT_CONCURRENCY,
+    async (group) => {
+      const representative = group[0];
+      if (!representative) return;
       try {
-        const packument = await fetchPackument(fetchImpl, pkg.name);
+        const packument = await fetchPackument(fetchImpl, representative.name);
         const createdAt = parseDate(packument.time?.created);
-        const versionAt = parseDate(packument.time?.[pkg.version]);
+        const versionAt = parseDate(packument.time?.[representative.version]);
         if (createdAt && daysBetween(createdAt, options.now) < NEW_PACKAGE_DAYS) {
-          findings.push(riskFinding(pkg, {
-            id: "TRAWLY-NEW-PACKAGE",
-            severity: "moderate",
-            summary: `${pkg.name} was first published less than ${NEW_PACKAGE_DAYS} days ago.`,
-          }));
+          for (const pkg of group) {
+            findings.push(
+              riskFinding(pkg, {
+                id: "TRAWLY-NEW-PACKAGE",
+                severity: "moderate",
+                summary: `${pkg.name} was first published less than ${NEW_PACKAGE_DAYS} days ago.`,
+              }),
+            );
+          }
         }
         if (versionAt && daysBetween(versionAt, options.now) < NEW_VERSION_DAYS) {
-          findings.push(riskFinding(pkg, {
-            id: "TRAWLY-NEW-VERSION",
-            severity: "low",
-            summary: `${pkg.name}@${pkg.version} was published less than ${NEW_VERSION_DAYS} days ago.`,
-          }));
+          for (const pkg of group) {
+            findings.push(
+              riskFinding(pkg, {
+                id: "TRAWLY-NEW-VERSION",
+                severity: "low",
+                summary: `${pkg.name}@${pkg.version} was published less than ${NEW_VERSION_DAYS} days ago.`,
+              }),
+            );
+          }
         }
       } catch (err) {
         warnings.push(
-          `Could not fetch npm publish metadata for ${pkg.name}: ${(err as Error).message}`,
+          `Could not fetch npm publish metadata for ${representative.name}: ${(err as Error).message}`,
         );
       }
-    }),
+    },
   );
 
   return { findings, warnings };
@@ -110,17 +127,16 @@ function riskFinding(
   };
 }
 
-function dedupeNpmPackages(packages: PackageInstance[]): PackageInstance[] {
-  const seen = new Set<string>();
-  const out: PackageInstance[] = [];
+function groupNpmPackages(packages: PackageInstance[]): PackageInstance[][] {
+  const groups = new Map<string, PackageInstance[]>();
   for (const pkg of packages) {
     if (pkg.ecosystem !== "npm") continue;
     const key = `${pkg.name}@${pkg.version}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(pkg);
+    const group = groups.get(key) ?? [];
+    group.push(pkg);
+    groups.set(key, group);
   }
-  return out;
+  return [...groups.values()];
 }
 
 async function fetchPackument(
@@ -128,20 +144,94 @@ async function fetchPackument(
   name: string,
 ): Promise<Packument> {
   const registry = (process.env[REGISTRY_ENV] ?? REGISTRY_URL).replace(/\/+$/, "");
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  try {
-    const res = await fetchImpl(`${registry}/${encodePackageName(name)}`, {
-      signal: controller.signal,
-      headers: { accept: "application/json" },
-    });
-    if (!res.ok) {
-      throw new Error(`registry ${res.status}: ${res.statusText}`);
+  const url = `${registry}/${encodePackageName(name)}`;
+  let lastErr: unknown;
+
+  for (let attempt = 0; attempt <= PACKUMENT_MAX_RETRIES; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      const res = await fetchImpl(url, {
+        signal: controller.signal,
+        headers: { accept: "application/json" },
+      });
+      if (res.ok) return (await res.json()) as Packument;
+
+      const err = new RegistryHttpError(
+        `registry ${res.status}: ${res.statusText}`,
+        res.status,
+        retryAfterMs(res.headers),
+      );
+      if (!isRetryableRegistryError(err) || attempt === PACKUMENT_MAX_RETRIES) {
+        throw err;
+      }
+      lastErr = err;
+      await sleep(retryDelayMs(err, attempt));
+    } catch (err) {
+      if (err instanceof RegistryHttpError) throw err;
+      lastErr = err;
+      if (attempt === PACKUMENT_MAX_RETRIES) break;
+      await sleep(retryDelayMs(undefined, attempt));
+    } finally {
+      clearTimeout(timer);
     }
-    return (await res.json()) as Packument;
-  } finally {
-    clearTimeout(timer);
   }
+  throw lastErr;
+}
+
+async function mapWithConcurrency<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  const workers = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    async () => {
+      while (next < items.length) {
+        const item = items[next++];
+        if (item !== undefined) await worker(item);
+      }
+    },
+  );
+  await Promise.all(workers);
+}
+
+class RegistryHttpError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly retryAfterMs?: number,
+  ) {
+    super(message);
+  }
+}
+
+function isRetryableRegistryError(err: RegistryHttpError): boolean {
+  return err.status === 429 || err.status >= 500;
+}
+
+function retryDelayMs(
+  err: RegistryHttpError | undefined,
+  attempt: number,
+): number {
+  if (err?.retryAfterMs !== undefined) return err.retryAfterMs;
+  const base = PACKUMENT_BACKOFF_MS * 2 ** attempt;
+  return base + Math.floor(Math.random() * Math.min(base, 100));
+}
+
+function retryAfterMs(headers: Headers): number | undefined {
+  const value = headers.get("retry-after");
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const date = Date.parse(value);
+  if (Number.isNaN(date)) return undefined;
+  return Math.max(0, date - Date.now());
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function isAllowedRegistry(registry: string, allowed: string[]): boolean {

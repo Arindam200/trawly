@@ -19,6 +19,7 @@ const SKIP_DIRS = new Set([
   "vendor",
 ]);
 const SAFE_ENV_SUFFIXES = new Set([
+  "default",
   "defaults",
   "dist",
   "example",
@@ -112,8 +113,12 @@ function findEnvFiles(root: string): string[] {
 function isEnvFile(name: string): boolean {
   if (name === ".env") return true;
   if (!name.startsWith(".env.")) return false;
-  const suffix = name.slice(".env.".length).toLowerCase();
-  return !SAFE_ENV_SUFFIXES.has(suffix);
+  const suffixes = name
+    .slice(".env.".length)
+    .toLowerCase()
+    .split(".")
+    .filter(Boolean);
+  return !suffixes.some((suffix) => SAFE_ENV_SUFFIXES.has(suffix));
 }
 
 function parseEnvAssignments(raw: string): EnvAssignment[] {

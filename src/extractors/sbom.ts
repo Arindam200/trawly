@@ -202,6 +202,9 @@ function purlName(purl: PackageURL): string {
       : `@${purl.namespace}`;
     return `${scope}/${purl.name}`;
   }
+  if (purl.type.toLowerCase() === "maven" && purl.namespace) {
+    return `${purl.namespace}:${purl.name}`;
+  }
   return purl.namespace ? `${purl.namespace}/${purl.name}` : purl.name;
 }
 

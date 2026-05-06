@@ -86,6 +86,27 @@ describe("parseSeverity", () => {
       parseSeverity({ id: "x" } as Parameters<typeof parseSeverity>[0]),
     ).toBe("unknown");
   });
+
+  it("uses ecosystem severity from the matching affected package", () => {
+    expect(
+      parseSeverity(
+        {
+          id: "x",
+          affected: [
+            {
+              package: { ecosystem: "npm", name: "other" },
+              ecosystem_specific: { severity: "CRITICAL" },
+            },
+            {
+              package: { ecosystem: "npm", name: "target" },
+              ecosystem_specific: { severity: "LOW" },
+            },
+          ],
+        } as Parameters<typeof parseSeverity>[0],
+        "target",
+      ),
+    ).toBe("low");
+  });
 });
 
 describe("collectFixedVersions", () => {

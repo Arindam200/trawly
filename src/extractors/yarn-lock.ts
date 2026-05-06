@@ -26,6 +26,8 @@ interface YarnBerryEntry {
   linkType?: string;
 }
 
+const LOCAL_YARN_PROTOCOLS = ["workspace:", "patch:", "portal:", "file:"];
+
 export interface ParsedYarnClassicEntry {
   specs: string[];
   fields: Record<string, string>;
@@ -96,7 +98,7 @@ export function parseYarnBerryLock(
     const entry = value as YarnBerryEntry;
     if (!entry.version) continue;
     const resolution = entry.resolution ?? descriptor;
-    if (resolution.includes("@workspace:")) {
+    if (hasLocalYarnProtocol(resolution) || hasLocalYarnProtocol(descriptor)) {
       continue;
     }
     const name =
@@ -120,6 +122,14 @@ export function parseYarnBerryLock(
     });
   }
   return dedupeInstances(instances);
+}
+
+function hasLocalYarnProtocol(value: string): boolean {
+  const normalized = value.trim().replace(/^"|"$/g, "");
+  return LOCAL_YARN_PROTOCOLS.some(
+    (protocol) =>
+      normalized.startsWith(protocol) || normalized.includes(`@${protocol}`),
+  );
 }
 
 export function parseClassicEntries(raw: string): ParsedYarnClassicEntry[] {

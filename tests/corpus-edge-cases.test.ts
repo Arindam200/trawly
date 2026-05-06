@@ -115,7 +115,7 @@ describe("lockfile dialect corpus", () => {
     });
   });
 
-  it("handles Yarn classic multi-selector entries and Yarn Berry patch descriptors", () => {
+  it("handles Yarn classic multi-selector entries and skips Yarn Berry local descriptors", () => {
     const classicDir = tempDir();
     writeJson(join(classicDir, "package.json"), {
       dependencies: { leftpad: "^1.0.0" },
@@ -157,10 +157,7 @@ describe("lockfile dialect corpus", () => {
         "",
       ].join("\n"),
     );
-    expect(parseYarnLock(berry)[0]).toMatchObject({
-      name: "leftpad",
-      version: "1.0.1",
-    });
+    expect(parseYarnLock(berry)).toEqual([]);
   });
 });
 
@@ -181,7 +178,7 @@ describe("SBOM dialect corpus", () => {
 
     expect(parseSbom(sbom).map((p) => `${p.ecosystem}:${p.name}@${p.version}`)).toEqual([
       "npm:@scope/pkg@1.2.3",
-      "Maven:org.apache.logging.log4j/log4j-core@2.17.1",
+      "Maven:org.apache.logging.log4j:log4j-core@2.17.1",
     ]);
   });
 

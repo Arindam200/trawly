@@ -1,5 +1,12 @@
 name: trawly
 description: Scan dependency lockfiles and SBOMs with trawly.
+outputs:
+  sarif-output:
+    description: Absolute SARIF output path.
+    value: ${{ steps.output-paths.outputs.sarif }}
+  markdown-output:
+    description: Absolute Markdown output path.
+    value: ${{ steps.output-paths.outputs.markdown }}
 inputs:
   path:
     description: Project directory to scan.

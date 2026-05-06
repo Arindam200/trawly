@@ -21,6 +21,8 @@ export { parseYarnLock, parseYarnDescriptorName } from "./extractors/yarn-lock.j
 export { parseLockfile } from "./extractors/lockfile.js";
 export { parseSbom, parsePurlPackage } from "./extractors/sbom.js";
 export { scanEnvFiles } from "./env.js";
+export { applyBaseline, writeBaseline, BaselineError } from "./baseline.js";
+export type { AppliedBaseline } from "./baseline.js";
 export { queryOsv, dedupeForQuery } from "./sources/osv.js";
 export { loadConfig, ConfigError } from "./config.js";
 export { SEVERITY_RANK } from "./types.js";

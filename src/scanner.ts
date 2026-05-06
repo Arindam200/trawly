@@ -119,7 +119,11 @@ export async function scanLockfile(
   findings.sort(compareFindings);
   ignoreResult.ignored.sort(compareFindings);
 
-  let baseline = applyBaseline(findings, cwd, options.baseline);
+  const appliedBaseline = applyBaseline(findings, cwd, options.baseline);
+  let baseline = appliedBaseline?.result;
+  if (appliedBaseline) {
+    findings = appliedBaseline.findings;
+  }
   if (options.writeBaseline) {
     baseline = writeBaseline(findings, cwd, options.writeBaseline, baseline);
   }

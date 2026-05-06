@@ -27,7 +27,6 @@ interface PnpmLockfile {
     }
   >;
   packages?: Record<string, PnpmPackageEntry>;
-  snapshots?: Record<string, unknown>;
   dependencies?: Record<string, string | PnpmDepRef>;
   devDependencies?: Record<string, string | PnpmDepRef>;
   optionalDependencies?: Record<string, string | PnpmDepRef>;

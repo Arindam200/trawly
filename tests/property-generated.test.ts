@@ -91,7 +91,7 @@ describe("generated parser properties", () => {
     const purls = [
       ["pkg:npm/%40scope/pkg@1.0.0", "npm", "@scope/pkg"],
       ["pkg:pypi/django@4.2.0", "PyPI", "django"],
-      ["pkg:maven/org.example/lib@1.2.3", "Maven", "org.example/lib"],
+      ["pkg:maven/org.example/lib@1.2.3", "Maven", "org.example:lib"],
       ["pkg:nuget/Newtonsoft.Json@13.0.3", "NuGet", "Newtonsoft.Json"],
       ["pkg:gem/rails@7.1.0", "RubyGems", "rails"],
       ["pkg:golang/github.com/gin-gonic/gin@1.9.1", "Go", "github.com/gin-gonic/gin"],

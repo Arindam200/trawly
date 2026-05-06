@@ -7,8 +7,8 @@ Package URLs, and queries the
 vulnerabilities. It can also flag lightweight supply-chain risk signals such as
 install scripts, unexpected registries, and unusually new packages.
 
-> **Limitation:** trawly reports known advisories. It cannot prove a package is
-> safe : absence of findings is not absence of risk.
+> **Limitation:** trawly reports known advisories and heuristic signals. It
+> cannot prove a package is safe : absence of findings is not absence of risk.
 
 ## Install
 
@@ -182,7 +182,8 @@ jobs:
       security-events: write
     steps:
       - uses: actions/checkout@v6
-      - uses: Arindam200/trawly@main
+      # Pin to the reviewed release commit SHA instead of a mutable branch.
+      - uses: Arindam200/trawly@<full-length-commit-sha>
         with:
           fail-on: high
           upload-sarif: "true"

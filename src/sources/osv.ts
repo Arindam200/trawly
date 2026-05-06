@@ -184,7 +184,7 @@ function buildFinding(
   id: string,
   detail: OsvVulnDetail | undefined,
 ): Finding {
-  const severity = detail ? parseSeverity(detail) : "unknown";
+  const severity = detail ? parseSeverity(detail, pkg.name) : "unknown";
   const summary = detail?.summary ?? detail?.details ?? id;
   const aliases = detail?.aliases ?? [];
   const fingerprint = fingerprintFinding({
@@ -214,7 +214,10 @@ function buildFinding(
   };
 }
 
-export function parseSeverity(detail: OsvVulnDetail): Severity {
+export function parseSeverity(
+  detail: OsvVulnDetail,
+  packageName?: string,
+): Severity {
   // GHSA records expose a normalized severity in database_specific.severity.
   const dbSpecific = detail.database_specific?.severity?.toLowerCase();
   if (
@@ -227,7 +230,7 @@ export function parseSeverity(detail: OsvVulnDetail): Severity {
   }
   if (dbSpecific === "medium") return "moderate";
 
-  for (const aff of detail.affected ?? []) {
+  for (const aff of matchingAffected(detail, packageName)) {
     const ecosystemSeverity = aff.ecosystem_specific?.severity?.toLowerCase();
     if (
       ecosystemSeverity === "critical" ||
@@ -270,8 +273,7 @@ export function collectFixedVersions(
   packageName: string,
 ): string[] {
   const out = new Set<string>();
-  for (const aff of detail.affected ?? []) {
-    if (aff.package?.name && aff.package.name !== packageName) continue;
+  for (const aff of matchingAffected(detail, packageName)) {
     for (const range of aff.ranges ?? []) {
       for (const event of range.events ?? []) {
         if (event.fixed) out.add(event.fixed);
@@ -279,6 +281,17 @@ export function collectFixedVersions(
     }
   }
   return [...out];
+}
+
+function matchingAffected(
+  detail: OsvVulnDetail,
+  packageName: string | undefined,
+): OsvAffectedPackage[] {
+  if (!packageName) return detail.affected ?? [];
+  return (detail.affected ?? []).filter((aff) => {
+    const affectedName = aff.package?.name;
+    return !affectedName || affectedName === packageName;
+  });
 }
 
 function* chunked<T>(items: T[], size: number): Generator<T[]> {

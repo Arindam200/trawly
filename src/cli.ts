@@ -410,7 +410,7 @@ async function runScanCommand(
     const config = loadConfig(cwd, opts.config).config;
     const failOn = opts.failOn ?? config.failOn ?? ("high" as FailOnLevel);
     const result = await scanProject({
-      cwd: path,
+      cwd,
       lockfile: opts.lockfile,
       sbom: opts.sbom,
       config: opts.config,
@@ -424,7 +424,7 @@ async function runScanCommand(
     });
 
     const output = renderReport(result, opts);
-    if (opts.output) writeOutput(path, opts.output, output);
+    if (opts.output) writeOutput(cwd, opts.output, output);
     else process.stdout.write(`${output}\n`);
 
     if (result.errors.length > 0) {

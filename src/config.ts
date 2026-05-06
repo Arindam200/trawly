@@ -67,6 +67,11 @@ function normalizeConfig(raw: unknown, path: string): TrawlyConfig {
     "allowedRegistries",
     path,
   );
+  if (raw.ignore !== undefined && raw.IgnoredVulns !== undefined) {
+    console.warn(
+      `${path}: both "ignore" and legacy "IgnoredVulns" are defined; using "ignore".`,
+    );
+  }
   const ignore = normalizeIgnore(raw.ignore ?? raw.IgnoredVulns ?? [], path);
 
   return {

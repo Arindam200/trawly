@@ -65,7 +65,7 @@ function findingToResult(finding: Finding): Record<string, unknown> {
       {
         physicalLocation: {
           artifactLocation: {
-            uri: finding.sourceFile ?? finding.affectedPaths[0] ?? finding.packageName,
+            uri: artifactUri(finding),
           },
           region: finding.line ? { startLine: finding.line } : undefined,
         },
@@ -89,6 +89,15 @@ function findingToResult(finding: Finding): Record<string, unknown> {
     ];
   }
   return result;
+}
+
+function artifactUri(finding: Finding): string {
+  const path = finding.sourceFile ?? finding.affectedPaths[0];
+  if (path) return path;
+  const ecosystem = encodeURIComponent(finding.ecosystem || "unknown");
+  const name = encodeURIComponent(finding.packageName || "unknown");
+  const version = encodeURIComponent(finding.installedVersion || "unknown");
+  return `pkg:${ecosystem}/${name}@${version}`;
 }
 
 function sarifLevel(finding: Finding): "error" | "warning" | "note" {

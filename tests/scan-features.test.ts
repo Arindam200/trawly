@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
@@ -11,11 +11,12 @@ import { tmpdir } from "node:os";
 import { applyBaseline, writeBaseline } from "../src/baseline.js";
 import { ConfigError, loadConfig } from "../src/config.js";
 import { scanEnvFiles } from "../src/env.js";
+import { fingerprintFinding } from "../src/fingerprint.js";
 import { applyIgnores } from "../src/ignore.js";
 import { reportMarkdown } from "../src/reporters/markdown.js";
 import { reportSarif } from "../src/reporters/sarif.js";
 import { collectRiskSignals } from "../src/risk.js";
-import { scanLockfile, scanProject } from "../src/scanner.js";
+import { meetsThreshold, scanLockfile, scanProject } from "../src/scanner.js";
 import type { Finding, PackageInstance, ScanResult } from "../src/types.js";
 import { TRAWLY_VERSION } from "../src/version.js";
 
@@ -42,12 +43,14 @@ function finding(overrides: Partial<Finding> = {}): Finding {
 }
 
 function result(findings: Finding[]): ScanResult {
+  const summary = { critical: 0, high: 0, moderate: 0, low: 0, unknown: 0 };
+  for (const f of findings) summary[f.severity] += 1;
   return {
     scannedAt: "2026-05-05T00:00:00.000Z",
     packagesScanned: 1,
     findings,
     ignoredFindings: [],
-    summary: { critical: 0, high: findings.length, moderate: 0, low: 0, unknown: 0 },
+    summary,
     errors: [],
     warnings: [],
   };
@@ -78,6 +81,35 @@ describe("config", () => {
     expect(loaded.config.ignore[0]?.expires).toBe("2026-06-30");
   });
 
+  it("warns when ignore and legacy IgnoredVulns are both present", () => {
+    const dir = tempDir();
+    writeFileSync(
+      join(dir, "trawly.toml"),
+      [
+        "[[ignore]]",
+        'id = "GHSA-new"',
+        'expires = "2026-06-30"',
+        'reason = "new key wins"',
+        "",
+        "[[IgnoredVulns]]",
+        'id = "GHSA-old"',
+        'expires = "2026-06-30"',
+        'reason = "legacy"',
+        "",
+      ].join("\n"),
+    );
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const loaded = loadConfig(dir);
+      expect(loaded.config.ignore[0]?.id).toBe("GHSA-new");
+      expect(warning).toHaveBeenCalledWith(
+        expect.stringContaining('both "ignore" and legacy "IgnoredVulns"'),
+      );
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
   it("rejects ignore entries without expiry", () => {
     const dir = tempDir();
     writeFileSync(
@@ -100,8 +132,12 @@ describe("baseline", () => {
     ];
     const baseline = applyBaseline(findings, dir, baselinePath);
 
-    expect(baseline).toMatchObject({ existing: 1, new: 1 });
-    expect(findings.map((f) => f.baseline)).toEqual(["existing", "new"]);
+    expect(baseline?.result).toMatchObject({ existing: 1, new: 1 });
+    expect(baseline?.findings.map((f) => f.baseline)).toEqual([
+      "existing",
+      "new",
+    ]);
+    expect(findings.map((f) => f.baseline)).toEqual([undefined, undefined]);
   });
 });
 
@@ -175,6 +211,67 @@ describe("risk signals", () => {
       "TRAWLY-UNEXPECTED-REGISTRY",
     ]);
   });
+
+  it("fans package-age signals out to each package instance and retries 429s", async () => {
+    const pkgs: PackageInstance[] = [
+      {
+        name: "fresh",
+        version: "1.0.0",
+        ecosystem: "npm",
+        path: "node_modules/fresh",
+        direct: true,
+        dev: false,
+        optional: false,
+      },
+      {
+        name: "fresh",
+        version: "1.0.0",
+        ecosystem: "npm",
+        path: "node_modules/dep/node_modules/fresh",
+        direct: false,
+        dev: false,
+        optional: false,
+      },
+    ];
+    let calls = 0;
+    const fakeFetch = (async () => {
+      calls++;
+      if (calls === 1) {
+        return new Response("rate limited", {
+          status: 429,
+          headers: { "retry-after": "0" },
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          time: {
+            created: "2026-05-01T00:00:00.000Z",
+            "1.0.0": "2026-05-04T00:00:00.000Z",
+          },
+        }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+
+    const out = await collectRiskSignals(pkgs, {
+      enabled: true,
+      allowedRegistries: ["https://registry.npmjs.org"],
+      fetchImpl: fakeFetch,
+      now: new Date("2026-05-05T00:00:00.000Z"),
+    });
+
+    expect(calls).toBe(2);
+    expect(out.warnings).toEqual([]);
+    expect(
+      out.findings
+        .filter((f) => f.id === "TRAWLY-NEW-VERSION")
+        .map((f) => f.affectedPaths[0])
+        .sort(),
+    ).toEqual([
+      "node_modules/dep/node_modules/fresh",
+      "node_modules/fresh",
+    ]);
+  });
 });
 
 describe("env scanning", () => {
@@ -204,6 +301,22 @@ describe("env scanning", () => {
       line: 2,
     });
     expect(JSON.stringify(out)).not.toContain(secretValue);
+  });
+
+  it("skips example, sample, template, and default env variants", () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, ".env.default"), "DATABASE_URL=real\n");
+    writeFileSync(join(dir, ".env.example.local"), "TOKEN=real\n");
+    writeFileSync(join(dir, ".env.production.sample"), "API_KEY=real\n");
+    writeFileSync(join(dir, ".env.local"), "DATABASE_URL=real\n");
+
+    const out = scanEnvFiles(dir);
+
+    expect(out.filesScanned).toBe(1);
+    expect(out.findings.map((f) => f.installedVersion)).toEqual([
+      ".env.local",
+      ".env.local",
+    ]);
   });
 
   it("can run env-only scans when explicitly enabled", async () => {
@@ -268,6 +381,57 @@ describe("scanner plumbing", () => {
     expect(out.packagesScanned).toBe(1);
     expect(urls).toEqual(["https://api.osv.dev/v1/querybatch"]);
   });
+
+  it("returns baseline membership on findings so gates only fail on new findings", async () => {
+    const dir = tempDir();
+    writeFileSync(
+      join(dir, "package-lock.json"),
+      JSON.stringify({
+        lockfileVersion: 3,
+        packages: {
+          "": { dependencies: { lodash: "4.17.20" } },
+          "node_modules/lodash": { version: "4.17.20" },
+        },
+      }),
+    );
+    const fingerprint = fingerprintFinding({
+      source: "osv",
+      type: "vulnerability",
+      id: "GHSA-known",
+      ecosystem: "npm",
+      packageName: "lodash",
+      installedVersion: "4.17.20",
+    });
+    writeBaseline([finding({ fingerprint })], dir, "baseline.json");
+    const fakeFetch = (async (input: URL | RequestInfo) => {
+      const url = String(input);
+      if (url.endsWith("/v1/querybatch")) {
+        return new Response(
+          JSON.stringify({ results: [{ vulns: [{ id: "GHSA-known" }] }] }),
+          { status: 200 },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          id: "GHSA-known",
+          summary: "Known issue",
+          database_specific: { severity: "HIGH" },
+        }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+
+    const out = await scanProject({
+      cwd: dir,
+      baseline: "baseline.json",
+      risk: false,
+      fetchImpl: fakeFetch,
+    });
+
+    expect(out.findings[0]?.baseline).toBe("existing");
+    expect(out.baseline).toMatchObject({ existing: 1, new: 0 });
+    expect(meetsThreshold(out.findings, "high")).toBe(false);
+  });
 });
 
 describe("reporters and CLI output", () => {
@@ -290,6 +454,33 @@ describe("reporters and CLI output", () => {
       packageJson.version,
     );
     expect(sarif.runs[0]?.results).toHaveLength(1);
+  });
+
+  it("uses a safe SARIF artifact URI when no source path is available", () => {
+    const sarif = JSON.parse(
+      reportSarif(
+        result([
+          finding({
+            packageName: "@scope/pkg",
+            installedVersion: "1.0.0",
+            affectedPaths: [],
+          }),
+        ]),
+      ),
+    ) as {
+      runs: Array<{
+        results: Array<{
+          locations: Array<{
+            physicalLocation: { artifactLocation: { uri: string } };
+          }>;
+        }>;
+      }>;
+    };
+
+    expect(
+      sarif.runs[0]?.results[0]?.locations[0]?.physicalLocation
+        .artifactLocation.uri,
+    ).toBe("pkg:npm/%40scope%2Fpkg@1.0.0");
   });
 
   it("does not enable env scanning unless the CLI flag is passed", () => {

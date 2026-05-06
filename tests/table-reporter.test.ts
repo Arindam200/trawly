@@ -51,8 +51,8 @@ describe("reportTable : grouped (default)", () => {
 
     const out = strip(reportTable(result));
 
-    expect(out).toContain("2 vulnerable");
-    expect(out).toContain("4 advisories");
+    expect(out).toContain("2 affected");
+    expect(out).toContain("4 findings");
     expect(out).toMatch(/tar\s+6\.2\.1\s+3 high\s+>=7\.5\.11/);
     expect(out).toMatch(/undici\s+5\.29\.0\s+1 moderate\s+>=7\.24\.0/);
     // Per-advisory IDs do not appear in grouped mode.
@@ -119,7 +119,8 @@ describe("reportTable : summary", () => {
 describe("reportTable : clean scan", () => {
   it("shows a green checkmark and skips tables", () => {
     const out = strip(reportTable(makeResult([])));
-    expect(out).toContain("No known advisories found");
+    expect(out).toContain("No active findings.");
+    expect(out).toContain("absence of findings is not proof of safety");
     expect(out).not.toContain("PACKAGE");
   });
 });

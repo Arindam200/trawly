@@ -88,10 +88,10 @@ export function reportTable(
   }
 
   if (result.findings.length === 0) {
-    lines.push(kleur.green("✓ No active findings. No known advisories found."));
+    lines.push(kleur.green("✓ No active findings."));
     lines.push(
       kleur.gray(
-        "  Note: this only checks known advisories. It cannot prove a package is safe.",
+        "  Note: absence of findings is not proof of safety.",
       ),
     );
     return lines.join("\n");
@@ -114,7 +114,7 @@ export function reportTable(
     lines.push(formatGroupedRows(groups));
     lines.push("");
     lines.push(
-      kleur.gray("Run `trawly scan --details` to see individual advisories."),
+      kleur.gray("Run `trawly scan --details` to see individual findings."),
     );
   }
 
@@ -132,14 +132,14 @@ function headerParts(result: ScanResult): {
   metricsLine: string;
   timestamp: string;
 } {
-  const vulnerable = new Set(
+  const affected = new Set(
     result.findings.map((f) => `${f.packageName}@${f.installedVersion}`),
   ).size;
-  const advisories = result.findings.length;
+  const findingCount = result.findings.length;
   const metricsLine = [
     `${result.packagesScanned} packages`,
-    `${vulnerable} vulnerable`,
-    `${advisories} ${advisories === 1 ? "advisory" : "advisories"}`,
+    `${affected} affected`,
+    `${findingCount} ${findingCount === 1 ? "finding" : "findings"}`,
   ].join(" · ");
   return { metricsLine, timestamp: result.scannedAt };
 }
@@ -157,7 +157,7 @@ function formatSummary(summary: ScanResult["summary"]): string {
 
 function reminder(): string {
   return kleur.gray(
-    "Reminder: trawly reports known advisories only. Absence of findings is not proof of safety.",
+    "Reminder: absence of findings is not proof of safety.",
   );
 }
 
