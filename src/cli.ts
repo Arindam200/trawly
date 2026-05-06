@@ -1,6 +1,7 @@
 import { Command, InvalidArgumentError } from "commander";
 import kleur from "kleur";
 import { reportAdd, runAdd } from "./commands/add.js";
+import { envIssuesMeetThreshold, scanEnv } from "./env-scan.js";
 import {
   buildInstallCommand,
   buildRemoveCommand,
@@ -8,6 +9,7 @@ import {
   type PackageManager,
 } from "./installer/pm-detect.js";
 import { runPackageManager } from "./installer/runner.js";
+import { reportEnvJson, reportEnvTable } from "./reporters/env-table.js";
 import { reportJson } from "./reporters/json.js";
 import { reportTable } from "./reporters/table.js";
 import { meetsThreshold, ScanInputError, scanProject } from "./scanner.js";
@@ -214,6 +216,28 @@ program
   });
 
 program
+  .command("env")
+  .description(
+    "Scan for env-file leaks: tracked .env files, missing .gitignore coverage, npm-publish exposure, and secrets in .env.example.",
+  )
+  .argument("[path]", "Project directory to scan", ".")
+  .option(
+    "--format <format>",
+    "Output format: table | json",
+    parseFormat,
+    "table" as Format,
+  )
+  .option(
+    "--fail-on <level>",
+    `Exit non-zero when an issue meets this severity (${FAIL_ON_VALUES.join("|")})`,
+    parseFailOn,
+    "high" as FailOnLevel,
+  )
+  .action(async (path: string, opts: EnvCliOptions) => {
+    await runEnvCommand(path, opts);
+  });
+
+program
   .command("remove")
   .alias("uninstall")
   .description(
@@ -259,6 +283,41 @@ interface AddCliOptions {
   failOn: FailOnLevel;
   pm?: PackageManager;
   allowVulnerable?: boolean;
+}
+
+interface EnvCliOptions {
+  format: Format;
+  failOn: FailOnLevel;
+}
+
+async function runEnvCommand(
+  path: string,
+  opts: EnvCliOptions,
+): Promise<void> {
+  try {
+    const result = await scanEnv({ cwd: path });
+    if (opts.format === "json") {
+      process.stdout.write(`${reportEnvJson(result)}\n`);
+    } else {
+      const brand = process.stdout.isTTY === true;
+      process.stdout.write(`${reportEnvTable(result, { brand })}\n`);
+    }
+    if (result.errors.length > 0) process.exit(EXIT.operational);
+    if (envIssuesMeetThreshold(result.issues, opts.failOn)) {
+      if (opts.format !== "json") {
+        process.stderr.write(
+          `${kleur.red(
+            `× Failing because at least one issue meets --fail-on=${opts.failOn}.`,
+          )}\n`,
+        );
+      }
+      process.exit(EXIT.findings);
+    }
+    process.exit(EXIT.ok);
+  } catch (err) {
+    printErr(`trawly: ${(err as Error).message}`);
+    process.exit(EXIT.operational);
+  }
 }
 
 async function runScanCommand(
