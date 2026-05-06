@@ -14,11 +14,14 @@ function f(
     source: "osv",
     type: "vulnerability",
     severity: partial.severity,
+    ecosystem: partial.ecosystem ?? "npm",
     packageName: partial.packageName,
     installedVersion: partial.installedVersion ?? "1.0.0",
     summary: partial.summary ?? "",
     fixedVersions: partial.fixedVersions ?? [],
     affectedPaths: partial.affectedPaths ?? [],
+    fingerprint: partial.fingerprint ?? "fp",
+    aliases: partial.aliases ?? [],
     url: partial.url,
   };
 }

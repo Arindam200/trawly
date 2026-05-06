@@ -131,7 +131,6 @@ program
   .option("--no-env", "Disable committed .env file scanning")
   .option("--prod", "Only scan production dependencies (excludes dev)")
   .option("--include-dev", "Include dev dependencies (default)")
-  .option("--no-cache", "Bypass any local cache")
   .option(
     "-v, --details",
     "Show one row per advisory (full table). Default groups by package.",
@@ -174,7 +173,6 @@ program
   .option("--no-env", "Disable committed .env file scanning")
   .option("--prod", "Only scan production dependencies (excludes dev)")
   .option("--include-dev", "Include dev dependencies (default)")
-  .option("--no-cache", "Bypass any local cache")
   .option(
     "-v, --details",
     "Show one row per advisory (full table). Default groups by package.",
@@ -323,7 +321,6 @@ interface ScanCliOptions {
   env?: boolean;
   prod?: boolean;
   includeDev?: boolean;
-  cache?: boolean;
   details?: boolean;
   summary?: boolean;
 }
@@ -420,7 +417,6 @@ async function runScanCommand(
       env: opts.env,
       includeDev: opts.includeDev,
       prodOnly: opts.prod,
-      cache: opts.cache,
     });
 
     const output = renderReport(result, opts);

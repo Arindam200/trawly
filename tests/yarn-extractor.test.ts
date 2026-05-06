@@ -41,15 +41,15 @@ describe("parseClassicEntries", () => {
     const content = `lodash@^4, lodash@^4.17.20:\n  version "4.17.20"\n`;
     const entries = parseClassicEntries(content);
     expect(entries).toHaveLength(1);
-    expect(entries[0].specs).toEqual(["lodash@^4", "lodash@^4.17.20"]);
-    expect(entries[0].fields.version).toBe("4.17.20");
+    expect(entries[0]?.specs).toEqual(["lodash@^4", "lodash@^4.17.20"]);
+    expect(entries[0]?.fields.version).toBe("4.17.20");
   });
 
   it("handles quoted scoped specs", () => {
     const content = `"@scope/sub@^1.0.0":\n  version "1.0.0"\n`;
     const entries = parseClassicEntries(content);
-    expect(entries[0].specs).toEqual(["@scope/sub@^1.0.0"]);
-    expect(entries[0].fields.version).toBe("1.0.0");
+    expect(entries[0]?.specs).toEqual(["@scope/sub@^1.0.0"]);
+    expect(entries[0]?.fields.version).toBe("1.0.0");
   });
 });
 

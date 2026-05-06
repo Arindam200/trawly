@@ -6,6 +6,7 @@ const OSV_VULN_URL = "https://api.osv.dev/v1/vulns";
 const QUERY_CHUNK_SIZE = 500;
 const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_RETRIES = 2;
+const DETAIL_CONCURRENCY = 8;
 
 interface OsvQueryBatchResponse {
   results: Array<{
@@ -101,7 +102,7 @@ export async function queryOsv(
   }
 
   const detailsById = new Map<string, OsvVulnDetail>();
-  for (const id of allIds) {
+  await mapWithConcurrency([...allIds], DETAIL_CONCURRENCY, async (id) => {
     try {
       const detail = await getJson<OsvVulnDetail>(
         fetchImpl,
@@ -111,7 +112,7 @@ export async function queryOsv(
     } catch {
       // Skip missing/broken records; we still have the id reported below.
     }
-  }
+  });
 
   const findings: Finding[] = [];
   for (const pkg of packages) {
@@ -298,6 +299,24 @@ function* chunked<T>(items: T[], size: number): Generator<T[]> {
   for (let i = 0; i < items.length; i += size) {
     yield items.slice(i, i + size);
   }
+}
+
+async function mapWithConcurrency<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  const workers = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    async () => {
+      while (next < items.length) {
+        const item = items[next++];
+        if (item !== undefined) await worker(item);
+      }
+    },
+  );
+  await Promise.all(workers);
 }
 
 async function postJson<T>(

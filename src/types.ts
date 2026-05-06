@@ -122,7 +122,6 @@ export interface ScanProjectOptions {
   allowedRegistries?: string[];
   includeDev?: boolean;
   prodOnly?: boolean;
-  cache?: boolean;
   fetchImpl?: typeof fetch;
   now?: Date;
 }

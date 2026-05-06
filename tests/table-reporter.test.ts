@@ -13,11 +13,14 @@ function makeFinding(overrides: Partial<Finding> = {}): Finding {
     source: "osv",
     type: "vulnerability",
     severity: "high",
+    ecosystem: "npm",
     packageName: "tar",
     installedVersion: "6.2.1",
     summary: "node-tar Vulnerable to Arbitrary File Creation/Overwrite via Hardlink",
     fixedVersions: ["7.5.7"],
     affectedPaths: [],
+    fingerprint: "fp",
+    aliases: [],
     ...overrides,
   };
 }
@@ -29,8 +32,10 @@ function makeResult(findings: Finding[]): ScanResult {
     scannedAt: "2026-05-05T00:00:00.000Z",
     packagesScanned: 170,
     findings,
+    ignoredFindings: [],
     summary,
     errors: [],
+    warnings: [],
   };
 }
 

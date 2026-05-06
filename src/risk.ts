@@ -55,17 +55,39 @@ export async function collectRiskSignals(
 
   const npmPackageGroups = groupNpmPackages(packages);
   const fetchImpl = options.fetchImpl ?? fetch;
+  // One packument per package name covers every installed version, so fetch
+  // by name and reuse across version groups.
+  const groupsByName = new Map<string, PackageInstance[][]>();
+  for (const group of npmPackageGroups) {
+    const name = group[0]?.name;
+    if (!name) continue;
+    const list = groupsByName.get(name) ?? [];
+    list.push(group);
+    groupsByName.set(name, list);
+  }
+
   await mapWithConcurrency(
-    npmPackageGroups,
+    [...groupsByName.entries()],
     PACKUMENT_CONCURRENCY,
-    async (group) => {
-      const representative = group[0];
-      if (!representative) return;
+    async ([name, groups]) => {
+      let packument: Packument;
       try {
-        const packument = await fetchPackument(fetchImpl, representative.name);
-        const createdAt = parseDate(packument.time?.created);
+        packument = await fetchPackument(fetchImpl, name);
+      } catch (err) {
+        warnings.push(
+          `Could not fetch npm publish metadata for ${name}: ${(err as Error).message}`,
+        );
+        return;
+      }
+      const createdAt = parseDate(packument.time?.created);
+      const isNewPackage =
+        !!createdAt && daysBetween(createdAt, options.now) < NEW_PACKAGE_DAYS;
+
+      for (const group of groups) {
+        const representative = group[0];
+        if (!representative) continue;
         const versionAt = parseDate(packument.time?.[representative.version]);
-        if (createdAt && daysBetween(createdAt, options.now) < NEW_PACKAGE_DAYS) {
+        if (isNewPackage) {
           for (const pkg of group) {
             findings.push(
               riskFinding(pkg, {
@@ -87,10 +109,6 @@ export async function collectRiskSignals(
             );
           }
         }
-      } catch (err) {
-        warnings.push(
-          `Could not fetch npm publish metadata for ${representative.name}: ${(err as Error).message}`,
-        );
       }
     },
   );

@@ -33,6 +33,7 @@
     "test:stress": "TRAWLY_STRESS=1 vitest run tests/stress-reliability.test.ts",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
+    "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
     "scan": "node --import tsx/esm src/cli.ts scan",
     "prepublishOnly": "npm run build"
   },

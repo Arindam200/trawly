@@ -88,7 +88,7 @@ describe("generated parser properties", () => {
   });
 
   it("normalizes generated PURLs across supported ecosystems", () => {
-    const purls = [
+    const purls: Array<[string, string, string]> = [
       ["pkg:npm/%40scope/pkg@1.0.0", "npm", "@scope/pkg"],
       ["pkg:pypi/django@4.2.0", "PyPI", "django"],
       ["pkg:maven/org.example/lib@1.2.3", "Maven", "org.example:lib"],

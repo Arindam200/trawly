@@ -84,7 +84,6 @@ Common options (both commands):
   --env / --no-env           Override committed .env scanning (CLI default: off)
   --prod                     Skip dev dependencies
   --include-dev              Include dev dependencies (default)
-  --no-cache                 Bypass any local cache
   -v, --details              Show one row per advisory instead of grouping
   -q, --summary              Print only the one-line severity summary
 
