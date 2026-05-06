@@ -1,7 +1,7 @@
 {
   "name": "trawly",
-  "version": "0.0.1",
-  "description": "Dependency sanity scanner for npm projects. Scans installed package versions against OSV and reports known vulnerabilities.",
+  "version": "0.1.0",
+  "description": "Dependency and SBOM security scanner for JavaScript projects, with OSV advisories, SARIF reports, baselines, and risk signals.",
   "type": "module",
   "license": "Apache-2.0",
   "engines": {

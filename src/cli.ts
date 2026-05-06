@@ -19,6 +19,7 @@ import { reportSarif } from "./reporters/sarif.js";
 import { reportTable } from "./reporters/table.js";
 import { meetsThreshold, ScanInputError, scanProject } from "./scanner.js";
 import type { FailOnLevel } from "./types.js";
+import { TRAWLY_VERSION } from "./version.js";
 
 const FAIL_ON_VALUES: FailOnLevel[] = [
   "critical",
@@ -80,8 +81,6 @@ function collectOption(value: string, previous: string[] = []): string[] {
   return previous;
 }
 
-const TRAWLY_VERSION = "0.1.0";
-
 const program = new Command();
 
 program
@@ -141,8 +140,10 @@ program
     "-q, --summary",
     "Show only the one-line severity summary. Mutually exclusive with --details.",
   )
-  .action(async (path: string, opts: ScanCliOptions) => {
-    await runScanCommand(path, opts, { gate: true });
+  .action(async (path: string, opts: ScanCliOptions, command: Command) => {
+    await runScanCommand(path, normalizeScanOptions(opts, command), {
+      gate: true,
+    });
   });
 
 program
@@ -182,10 +183,13 @@ program
     "-q, --summary",
     "Show only the one-line severity summary. Mutually exclusive with --details.",
   )
-  .action(async (path: string, opts: InspectCliOptions) => {
+  .action(async (path: string, opts: InspectCliOptions, command: Command) => {
     await runScanCommand(
       path,
-      { ...opts, failOn: "none" as FailOnLevel },
+      {
+        ...normalizeScanOptions(opts, command),
+        failOn: "none" as FailOnLevel,
+      },
       { gate: false },
     );
   });
@@ -335,6 +339,26 @@ interface AddCliOptions {
 interface EnvCliOptions {
   format: EnvFormat;
   failOn: FailOnLevel;
+}
+
+function normalizeScanOptions<T extends ScanCliOptions | InspectCliOptions>(
+  opts: T,
+  command: Command,
+): T {
+  return {
+    ...opts,
+    risk: triStateBooleanFlag(command, "risk"),
+    env: triStateBooleanFlag(command, "env"),
+  };
+}
+
+function triStateBooleanFlag(
+  command: Command,
+  name: "risk" | "env",
+): boolean | undefined {
+  return command.getOptionValueSource(name) === "cli"
+    ? (command.getOptionValue(name) as boolean)
+    : undefined;
 }
 
 async function runEnvCommand(

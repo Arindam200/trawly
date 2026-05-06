@@ -80,8 +80,8 @@ Common options (both commands):
   --config <path>            Path to trawly.toml
   --baseline <path>          Mark existing findings and fail only on new ones
   --write-baseline <path>    Write the current active findings baseline
-  --risk / --no-risk         Enable or disable risk signals
-  --env / --no-env           Enable or disable committed .env file scanning
+  --risk / --no-risk         Override risk signals (default: config, otherwise on)
+  --env / --no-env           Override committed .env scanning (CLI default: off)
   --prod                     Skip dev dependencies
   --include-dev              Include dev dependencies (default)
   --no-cache                 Bypass any local cache

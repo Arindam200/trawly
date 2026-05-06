@@ -62,12 +62,14 @@ export async function scanProject(
 export async function scanLockfile(
   options: ScanLockfileOptions,
 ): Promise<ScanResult> {
-  const cwd =
-    options.cwd ??
-    dirname(normalizePaths(process.cwd(), options.lockfilePath)[0] ?? process.cwd());
+  const initialCwd = resolve(options.cwd ?? process.cwd());
+  const lockfilePaths = normalizePaths(initialCwd, options.lockfilePath);
+  const sbomPaths = normalizePaths(initialCwd, options.sbom);
+  const cwd = options.cwd
+    ? initialCwd
+    : deriveCwdFromInputs(lockfilePaths, sbomPaths, initialCwd);
+  const now = options.now ?? new Date();
   const loadedConfig = loadConfig(cwd, options.config);
-  const lockfilePaths = normalizePaths(cwd, options.lockfilePath);
-  const sbomPaths = normalizePaths(cwd, options.sbom);
 
   for (const path of [...lockfilePaths, ...sbomPaths]) validateFile(path);
 
@@ -101,7 +103,7 @@ export async function scanLockfile(
       loadedConfig.config.allowedRegistries ??
       DEFAULT_ALLOWED_REGISTRIES,
     fetchImpl: options.fetchImpl,
-    now: options.now ?? new Date(),
+    now,
   });
   findings.push(...risk.findings);
   warnings.push(...risk.warnings);
@@ -109,7 +111,7 @@ export async function scanLockfile(
   const ignoreResult = applyIgnores(
     findings,
     loadedConfig.config.ignore,
-    options.now ?? new Date(),
+    now,
   );
   warnings.push(...ignoreResult.warnings);
   findings = ignoreResult.active;
@@ -123,7 +125,7 @@ export async function scanLockfile(
   }
 
   return {
-    scannedAt: new Date().toISOString(),
+    scannedAt: now.toISOString(),
     packagesScanned: instances.length,
     findings,
     ignoredFindings: ignoreResult.ignored,
@@ -132,6 +134,15 @@ export async function scanLockfile(
     warnings,
     baseline,
   };
+}
+
+function deriveCwdFromInputs(
+  lockfilePaths: string[],
+  sbomPaths: string[],
+  fallback: string,
+): string {
+  const firstInput = lockfilePaths[0] ?? sbomPaths[0];
+  return firstInput ? dirname(firstInput) : fallback;
 }
 
 export class ScanInputError extends Error {

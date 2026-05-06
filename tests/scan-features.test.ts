@@ -15,8 +15,9 @@ import { applyIgnores } from "../src/ignore.js";
 import { reportMarkdown } from "../src/reporters/markdown.js";
 import { reportSarif } from "../src/reporters/sarif.js";
 import { collectRiskSignals } from "../src/risk.js";
-import { scanProject } from "../src/scanner.js";
+import { scanLockfile, scanProject } from "../src/scanner.js";
 import type { Finding, PackageInstance, ScanResult } from "../src/types.js";
+import { TRAWLY_VERSION } from "../src/version.js";
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "trawly-"));
@@ -228,16 +229,94 @@ describe("env scanning", () => {
   });
 });
 
+describe("scanner plumbing", () => {
+  it("derives cwd from SBOM-only inputs and uses the supplied clock", async () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, "trawly.toml"), "risk = false\n");
+    const sbomPath = join(dir, "bom.cdx.json");
+    writeFileSync(
+      sbomPath,
+      JSON.stringify({
+        bomFormat: "CycloneDX",
+        specVersion: "1.5",
+        components: [
+          {
+            type: "library",
+            name: "left-pad",
+            version: "1.3.0",
+            purl: "pkg:npm/left-pad@1.3.0",
+          },
+        ],
+      }),
+    );
+
+    const urls: string[] = [];
+    const fakeFetch = (async (input: URL | RequestInfo) => {
+      urls.push(String(input));
+      return new Response(JSON.stringify({ results: [{}] }), { status: 200 });
+    }) as typeof fetch;
+    const now = new Date("2026-05-05T12:00:00.000Z");
+
+    const out = await scanLockfile({
+      lockfilePath: [],
+      sbom: sbomPath,
+      fetchImpl: fakeFetch,
+      now,
+    });
+
+    expect(out.scannedAt).toBe(now.toISOString());
+    expect(out.packagesScanned).toBe(1);
+    expect(urls).toEqual(["https://api.osv.dev/v1/querybatch"]);
+  });
+});
+
 describe("reporters and CLI output", () => {
   it("renders Markdown and SARIF reports", () => {
     const scan = result([finding()]);
     expect(reportMarkdown(scan)).toContain("| high | osv | lodash | 4.17.20 |");
+    const packageJson = JSON.parse(
+      readFileSync(join(process.cwd(), "package.json"), "utf8"),
+    ) as { version: string };
     const sarif = JSON.parse(reportSarif(scan)) as {
       version: string;
-      runs: Array<{ results: unknown[] }>;
+      runs: Array<{
+        tool: { driver: { semanticVersion: string } };
+        results: unknown[];
+      }>;
     };
+    expect(TRAWLY_VERSION).toBe(packageJson.version);
     expect(sarif.version).toBe("2.1.0");
+    expect(sarif.runs[0]?.tool.driver.semanticVersion).toBe(
+      packageJson.version,
+    );
     expect(sarif.runs[0]?.results).toHaveLength(1);
+  });
+
+  it("does not enable env scanning unless the CLI flag is passed", () => {
+    const dir = tempDir();
+    writeFileSync(
+      join(dir, "package-lock.json"),
+      JSON.stringify({ lockfileVersion: 3, packages: { "": {} } }, null, 2),
+    );
+    writeFileSync(join(dir, ".env"), "TOKEN=live-token-value\n");
+
+    const out = execFileSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx/esm",
+        "src/cli.ts",
+        "inspect",
+        dir,
+        "--format",
+        "json",
+        "--no-risk",
+      ],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+
+    const parsed = JSON.parse(out) as ScanResult;
+    expect(parsed.findings).toEqual([]);
   });
 
   it("writes CLI output to a file", () => {

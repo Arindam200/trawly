@@ -1,4 +1,5 @@
 import type { Finding, ScanResult } from "../types.js";
+import { TRAWLY_VERSION } from "../version.js";
 
 interface SarifRule {
   id: string;
@@ -22,7 +23,7 @@ export function reportSarif(result: ScanResult): string {
           driver: {
             name: "trawly",
             informationUri: "https://github.com/Arindam200/trawly",
-            semanticVersion: "0.1.0",
+            semanticVersion: TRAWLY_VERSION,
             rules,
           },
         },

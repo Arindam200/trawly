@@ -24,6 +24,7 @@ export { scanEnvFiles } from "./env.js";
 export { queryOsv, dedupeForQuery } from "./sources/osv.js";
 export { loadConfig, ConfigError } from "./config.js";
 export { SEVERITY_RANK } from "./types.js";
+export { TRAWLY_VERSION } from "./version.js";
 export type {
   Severity,
   Ecosystem,
