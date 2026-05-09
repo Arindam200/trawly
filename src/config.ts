@@ -1,7 +1,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { parse as parseToml } from "smol-toml";
-import type { FailOnLevel, IgnoreEntry, TrawlyConfig } from "./types.js";
+import type {
+  FailOnLevel,
+  IgnoreEntry,
+  PolicyPresetName,
+  TrawlyConfig,
+} from "./types.js";
 
 const CONFIG_NAME = "trawly.toml";
 const FAIL_ON_VALUES = new Set<FailOnLevel>([
@@ -10,6 +15,12 @@ const FAIL_ON_VALUES = new Set<FailOnLevel>([
   "moderate",
   "low",
   "none",
+]);
+const POLICY_VALUES = new Set<PolicyPresetName>([
+  "ci",
+  "strict",
+  "library",
+  "app",
 ]);
 
 export interface LoadedConfig {
@@ -61,7 +72,15 @@ function normalizeConfig(raw: unknown, path: string): TrawlyConfig {
     );
   }
 
+  const policy = optionalString(raw.policy, "policy", path);
+  if (policy !== undefined && !POLICY_VALUES.has(policy as PolicyPresetName)) {
+    throw new ConfigError(
+      `${path}: policy must be one of ${[...POLICY_VALUES].join(", ")}.`,
+    );
+  }
+
   const risk = optionalBoolean(raw.risk, "risk", path);
+  const env = optionalBoolean(raw.env, "env", path);
   const allowedRegistries = normalizeStringArray(
     raw.allowedRegistries,
     "allowedRegistries",
@@ -76,7 +95,9 @@ function normalizeConfig(raw: unknown, path: string): TrawlyConfig {
 
   return {
     failOn: failOn as FailOnLevel | undefined,
+    policy: policy as PolicyPresetName | undefined,
     risk,
+    env,
     allowedRegistries,
     ignore,
   };

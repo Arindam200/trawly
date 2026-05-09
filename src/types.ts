@@ -90,7 +90,9 @@ export interface IgnoreEntry {
 
 export interface TrawlyConfig {
   failOn?: FailOnLevel;
+  policy?: PolicyPresetName;
   risk?: boolean;
+  env?: boolean;
   allowedRegistries?: string[];
   ignore: IgnoreEntry[];
 }
@@ -115,6 +117,7 @@ export interface ScanProjectOptions {
   lockfile?: string | string[];
   sbom?: string | string[];
   config?: string;
+  policy?: PolicyPresetName;
   baseline?: string;
   writeBaseline?: string;
   risk?: boolean;
@@ -131,6 +134,7 @@ export interface ScanLockfileOptions {
   sbom?: string | string[];
   cwd?: string;
   config?: string;
+  policy?: PolicyPresetName;
   baseline?: string;
   writeBaseline?: string;
   risk?: boolean;
@@ -143,3 +147,5 @@ export interface ScanLockfileOptions {
 }
 
 export type FailOnLevel = Severity | "none";
+
+export type PolicyPresetName = "ci" | "strict" | "library" | "app";

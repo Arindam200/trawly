@@ -1,11 +1,11 @@
 # trawly
 
-A dependency sanity scanner for JavaScript projects and SBOMs. Reads exact
-installed versions from npm, pnpm, and Yarn lockfiles, or from SPDX/CycloneDX
-Package URLs, and queries the
-[OSV](https://google.github.io/osv.dev/api/) advisory database for known
-vulnerabilities. It can also flag lightweight supply-chain risk signals such as
-install scripts, unexpected registries, and unusually new packages.
+A dependency risk gate for JavaScript projects and SBOMs. Reads exact installed
+versions from npm, pnpm, and Yarn lockfiles, or from SPDX/CycloneDX Package
+URLs, and queries the [OSV](https://google.github.io/osv.dev/api/) advisory
+database for known vulnerabilities. It also flags supply-chain risk signals such
+as install scripts, deprecated packages, unexpected registries, and unusually
+new packages.
 
 > **Limitation:** trawly reports known advisories and heuristic signals. It
 > cannot prove a package is safe : absence of findings is not absence of risk.
@@ -29,6 +29,9 @@ npx trawly inspect
 # gating run : exits non-zero when findings meet --fail-on (default: high). Use this in CI.
 npx trawly scan
 
+# create trawly.toml and a baseline for existing findings
+npx trawly init
+
 # scan specific lockfiles or SBOMs
 npx trawly scan --lockfile path/to/package-lock.json
 npx trawly scan --lockfile pnpm-lock.yaml --lockfile yarn.lock
@@ -42,9 +45,16 @@ npx trawly scan --format markdown --output trawly.md
 # include committed .env-file checks
 npx trawly scan --env
 
+# use built-in policy presets
+npx trawly scan --policy strict
+npx trawly scan --policy library
+
 # fail only on findings absent from a saved baseline
 npx trawly scan --baseline trawly-baseline.json
 npx trawly inspect --write-baseline trawly-baseline.json
+
+# explain where a package appears in the lockfile
+npx trawly why lodash
 
 # only production deps
 npx trawly scan --prod
@@ -69,6 +79,8 @@ Both produce identical output. Only the exit behaviour differs.
 ```
 trawly scan [path]      Gating run. Exits non-zero when --fail-on is met.
 trawly inspect [path]   Log-only run. Always exits 0 on findings.
+trawly init [path]      Write trawly.toml and an initial baseline.
+trawly why <pkg> [path] Explain where a package appears in lockfiles.
 
 Common options (both commands):
 
@@ -78,6 +90,8 @@ Common options (both commands):
                              Output format (default: table)
   --output <path>            Write report output to a file
   --config <path>            Path to trawly.toml
+  --policy ci|strict|library|app
+                             Apply built-in scan defaults
   --baseline <path>          Mark existing findings and fail only on new ones
   --write-baseline <path>    Write the current active findings baseline
   --risk / --no-risk         Override risk signals (default: config, otherwise on)
@@ -91,6 +105,18 @@ scan-only:
   --fail-on <level>          Severity gate
                              (critical|high|moderate|low|none, default: high)
 ```
+
+### Policy presets
+
+Policy presets are conservative defaults that can be overridden by explicit CLI
+flags or `trawly.toml`.
+
+| Policy    | Fail on  | Risk signals | Env scan | Dev deps | Best for                  |
+| --------- | -------- | ------------ | -------- | -------- | ------------------------- |
+| `ci`      | high     | on           | off      | included | Default CI gate           |
+| `strict`  | moderate | on           | on       | included | Security-sensitive repos  |
+| `library` | moderate | on           | off      | excluded | Published packages        |
+| `app`     | high     | on           | on       | included | Deployed applications     |
 
 ### Exit codes
 
@@ -155,7 +181,9 @@ trawly auto-discovers `trawly.toml` in the scanned project, or you can pass
 
 ```toml
 failOn = "high"
+policy = "ci"
 risk = true
+env = false
 allowedRegistries = ["https://registry.npmjs.org", "https://registry.yarnpkg.com"]
 
 [[ignore]]
@@ -224,5 +252,8 @@ Implemented in this branch:
 - SARIF + Markdown reporters and a GitHub Action
 - Config file with ignore entries (with required expiry)
 - Baseline mode (fail only on new findings)
-- Risk signals: install scripts, unexpected registries, package age
+- `init` onboarding command
+- Policy presets: `ci`, `strict`, `library`, `app`
+- `why` lockfile locator command
+- Risk signals: install scripts, deprecated packages, unexpected registries, package age
 - Multi-ecosystem scanning via SBOM (SPDX, CycloneDX)

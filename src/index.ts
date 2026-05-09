@@ -8,6 +8,9 @@ export {
 } from "./scanner.js";
 
 export { scanEnv, envIssuesMeetThreshold } from "./env-scan.js";
+export { initProject } from "./init.js";
+export { explainWhy } from "./why.js";
+export { POLICY_PRESETS, resolvePolicy } from "./policy.js";
 export type {
   EnvIssue,
   EnvIssueKind,
@@ -44,4 +47,5 @@ export type {
   BaselineFile,
   BaselineResult,
   FailOnLevel,
+  PolicyPresetName,
 } from "./types.js";

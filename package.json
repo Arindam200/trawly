@@ -1,7 +1,7 @@
 {
   "name": "trawly",
-  "version": "0.1.0",
-  "description": "Dependency and SBOM security scanner for JavaScript projects, with OSV advisories, SARIF reports, baselines, and risk signals.",
+  "version": "0.1.1",
+  "description": "Dependency risk gate for JavaScript projects: OSV advisories, SBOM scans, baselines, install blocking, and supply-chain risk signals.",
   "type": "module",
   "license": "Apache-2.0",
   "engines": {

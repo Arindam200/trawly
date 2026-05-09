@@ -6,6 +6,7 @@ import { scanEnvFiles } from "./env.js";
 import { parseLockfile } from "./extractors/lockfile.js";
 import { parseSbom } from "./extractors/sbom.js";
 import { applyIgnores } from "./ignore.js";
+import { resolvePolicy } from "./policy.js";
 import { collectRiskSignals } from "./risk.js";
 import { queryOsv } from "./sources/osv.js";
 import { SEVERITY_RANK } from "./types.js";
@@ -29,11 +30,12 @@ export async function scanProject(
 ): Promise<ScanResult> {
   const cwd = resolve(options.cwd ?? process.cwd());
   const loadedConfig = loadConfig(cwd, options.config);
+  const policy = resolvePolicy(options.policy, loadedConfig.config.policy);
   const lockfilePaths = options.lockfile
     ? normalizePaths(cwd, options.lockfile)
     : detectLockfiles(cwd);
   const sbomPaths = normalizePaths(cwd, options.sbom);
-  const envEnabled = options.env ?? false;
+  const envEnabled = options.env ?? loadedConfig.config.env ?? policy?.env ?? false;
 
   if (lockfilePaths.length === 0 && sbomPaths.length === 0 && !envEnabled) {
     throw new ScanInputError(
@@ -46,13 +48,14 @@ export async function scanProject(
     sbom: sbomPaths,
     cwd,
     config: options.config,
+    policy: options.policy,
     baseline: options.baseline,
     writeBaseline: options.writeBaseline,
-    risk: options.risk ?? loadedConfig.config.risk,
+    risk: options.risk ?? loadedConfig.config.risk ?? policy?.risk,
     env: envEnabled,
     allowedRegistries:
       options.allowedRegistries ?? loadedConfig.config.allowedRegistries,
-    includeDev: options.includeDev,
+    includeDev: options.includeDev ?? policy?.includeDev,
     prodOnly: options.prodOnly,
     fetchImpl: options.fetchImpl,
     now: options.now,
@@ -70,6 +73,8 @@ export async function scanLockfile(
     : deriveCwdFromInputs(lockfilePaths, sbomPaths, initialCwd);
   const now = options.now ?? new Date();
   const loadedConfig = loadConfig(cwd, options.config);
+  const policy = resolvePolicy(options.policy, loadedConfig.config.policy);
+  const envEnabled = options.env ?? loadedConfig.config.env ?? policy?.env ?? false;
 
   for (const path of [...lockfilePaths, ...sbomPaths]) validateFile(path);
 
@@ -77,10 +82,13 @@ export async function scanLockfile(
     ...lockfilePaths.flatMap((path) => parseLockfile(path)),
     ...sbomPaths.flatMap((path) => parseSbom(path)),
   ];
-  const instances = filterInstances(allInstances, options);
+  const instances = filterInstances(allInstances, {
+    ...options,
+    includeDev: options.includeDev ?? policy?.includeDev,
+  });
   const errors: ScanError[] = [];
   const warnings: string[] = [];
-  const envResult = options.env
+  const envResult = envEnabled
     ? scanEnvFiles(cwd)
     : { findings: [], warnings: [], filesScanned: 0 };
   warnings.push(...envResult.warnings);
@@ -95,7 +103,8 @@ export async function scanLockfile(
     });
   }
 
-  const riskEnabled = options.risk ?? loadedConfig.config.risk ?? true;
+  const riskEnabled =
+    options.risk ?? loadedConfig.config.risk ?? policy?.risk ?? true;
   const risk = await collectRiskSignals(instances, {
     enabled: riskEnabled,
     allowedRegistries:

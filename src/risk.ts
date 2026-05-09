@@ -19,6 +19,7 @@ export interface RiskOptions {
 
 interface Packument {
   time?: Record<string, string>;
+  versions?: Record<string, { deprecated?: string }>;
 }
 
 export interface RiskResult {
@@ -87,6 +88,7 @@ export async function collectRiskSignals(
         const representative = group[0];
         if (!representative) continue;
         const versionAt = parseDate(packument.time?.[representative.version]);
+        const deprecated = packument.versions?.[representative.version]?.deprecated;
         if (isNewPackage) {
           for (const pkg of group) {
             findings.push(
@@ -94,6 +96,17 @@ export async function collectRiskSignals(
                 id: "TRAWLY-NEW-PACKAGE",
                 severity: "moderate",
                 summary: `${pkg.name} was first published less than ${NEW_PACKAGE_DAYS} days ago.`,
+              }),
+            );
+          }
+        }
+        if (deprecated) {
+          for (const pkg of group) {
+            findings.push(
+              riskFinding(pkg, {
+                id: "TRAWLY-DEPRECATED-PACKAGE",
+                severity: "moderate",
+                summary: `${pkg.name}@${pkg.version} is deprecated: ${deprecated}`,
               }),
             );
           }

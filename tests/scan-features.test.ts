@@ -12,6 +12,7 @@ import { applyBaseline, writeBaseline } from "../src/baseline.js";
 import { ConfigError, loadConfig } from "../src/config.js";
 import { scanEnvFiles } from "../src/env.js";
 import { fingerprintFinding } from "../src/fingerprint.js";
+import { initProject } from "../src/init.js";
 import { applyIgnores } from "../src/ignore.js";
 import { reportMarkdown } from "../src/reporters/markdown.js";
 import { reportSarif } from "../src/reporters/sarif.js";
@@ -19,6 +20,7 @@ import { collectRiskSignals } from "../src/risk.js";
 import { meetsThreshold, scanLockfile, scanProject } from "../src/scanner.js";
 import type { Finding, PackageInstance, ScanResult } from "../src/types.js";
 import { TRAWLY_VERSION } from "../src/version.js";
+import { explainWhy } from "../src/why.js";
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "trawly-"));
@@ -63,7 +65,9 @@ describe("config", () => {
       join(dir, "trawly.toml"),
       [
         'failOn = "moderate"',
+        'policy = "strict"',
         "risk = false",
+        "env = true",
         'allowedRegistries = ["https://registry.npmjs.org"]',
         "",
         "[[ignore]]",
@@ -77,7 +81,9 @@ describe("config", () => {
 
     const loaded = loadConfig(dir);
     expect(loaded.config.failOn).toBe("moderate");
+    expect(loaded.config.policy).toBe("strict");
     expect(loaded.config.risk).toBe(false);
+    expect(loaded.config.env).toBe(true);
     expect(loaded.config.ignore[0]?.expires).toBe("2026-06-30");
   });
 
@@ -212,6 +218,46 @@ describe("risk signals", () => {
     ]);
   });
 
+  it("reports deprecated npm versions from packument metadata", async () => {
+    const pkg: PackageInstance = {
+      name: "old",
+      version: "1.0.0",
+      ecosystem: "npm",
+      path: "node_modules/old",
+      direct: true,
+      dev: false,
+      optional: false,
+    };
+    const fakeFetch = (async () =>
+      new Response(
+        JSON.stringify({
+          time: {
+            created: "2020-01-01T00:00:00.000Z",
+            "1.0.0": "2020-01-01T00:00:00.000Z",
+          },
+          versions: {
+            "1.0.0": { deprecated: "use old-next instead" },
+          },
+        }),
+        { status: 200 },
+      )) as typeof fetch;
+
+    const out = await collectRiskSignals([pkg], {
+      enabled: true,
+      allowedRegistries: ["https://registry.npmjs.org"],
+      fetchImpl: fakeFetch,
+      now: new Date("2026-05-05T00:00:00.000Z"),
+    });
+
+    expect(out.findings).toMatchObject([
+      {
+        id: "TRAWLY-DEPRECATED-PACKAGE",
+        severity: "moderate",
+        summary: "old@1.0.0 is deprecated: use old-next instead",
+      },
+    ]);
+  });
+
   it("fans package-age signals out to each package instance and retries 429s", async () => {
     const pkgs: PackageInstance[] = [
       {
@@ -343,6 +389,43 @@ describe("env scanning", () => {
 });
 
 describe("scanner plumbing", () => {
+  it("uses policy presets as scan defaults", async () => {
+    const dir = tempDir();
+    writeFileSync(
+      join(dir, "package-lock.json"),
+      JSON.stringify({
+        lockfileVersion: 3,
+        packages: {
+          "": { devDependencies: { devonly: "1.0.0" } },
+          "node_modules/devonly": { version: "1.0.0", dev: true },
+        },
+      }),
+    );
+    const fakeFetch = (async (_input: URL | RequestInfo, init?: RequestInit) => {
+      if (!init?.body) {
+        return new Response(
+          JSON.stringify({
+            time: {
+              created: "2026-05-01T00:00:00.000Z",
+              "1.0.0": "2026-05-04T00:00:00.000Z",
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response(JSON.stringify({ results: [] }), { status: 200 });
+    }) as typeof fetch;
+
+    const out = await scanProject({
+      cwd: dir,
+      policy: "library",
+      fetchImpl: fakeFetch,
+      now: new Date("2026-05-05T00:00:00.000Z"),
+    });
+
+    expect(out.packagesScanned).toBe(0);
+  });
+
   it("derives cwd from SBOM-only inputs and uses the supplied clock", async () => {
     const dir = tempDir();
     writeFileSync(join(dir, "trawly.toml"), "risk = false\n");
@@ -461,6 +544,54 @@ describe("scanner plumbing", () => {
 
     expect(out.packagesScanned).toBe(1);
     expect(querySizes).toEqual([1]);
+  });
+});
+
+describe("init and why", () => {
+  it("initializes config and writes a baseline", async () => {
+    const dir = tempDir();
+    writeFileSync(
+      join(dir, "package-lock.json"),
+      JSON.stringify({ lockfileVersion: 3, packages: { "": {} } }, null, 2),
+    );
+
+    const out = await initProject({
+      cwd: dir,
+      policy: "strict",
+      risk: false,
+      env: false,
+      fetchImpl: (async () =>
+        new Response(JSON.stringify({ results: [] }), {
+          status: 200,
+        })) as typeof fetch,
+    });
+
+    expect(out.configWritten).toBe(true);
+    expect(out.baselineWritten).toBe(true);
+    expect(readFileSync(join(dir, "trawly.toml"), "utf8")).toContain(
+      'policy = "strict"',
+    );
+    expect(existsSync(join(dir, "trawly-baseline.json"))).toBe(true);
+  });
+
+  it("explains npm nested package paths", () => {
+    const dir = tempDir();
+    writeFileSync(
+      join(dir, "package-lock.json"),
+      JSON.stringify({
+        lockfileVersion: 3,
+        packages: {
+          "": { dependencies: { parent: "1.0.0" } },
+          "node_modules/parent": { version: "1.0.0" },
+          "node_modules/parent/node_modules/child": { version: "2.0.0" },
+        },
+      }),
+    );
+
+    const out = explainWhy("child", { cwd: dir });
+
+    expect(out.matches).toHaveLength(1);
+    expect(out.matches[0]?.chain).toEqual(["parent", "child"]);
   });
 });
 

@@ -5,6 +5,7 @@ import kleur from "kleur";
 import { reportAdd, runAdd } from "./commands/add.js";
 import { ConfigError, loadConfig } from "./config.js";
 import { envIssuesMeetThreshold, scanEnv } from "./env-scan.js";
+import { initProject } from "./init.js";
 import {
   buildInstallCommand,
   buildRemoveCommand,
@@ -17,9 +18,11 @@ import { reportJson } from "./reporters/json.js";
 import { reportMarkdown } from "./reporters/markdown.js";
 import { reportSarif } from "./reporters/sarif.js";
 import { reportTable } from "./reporters/table.js";
+import { resolvePolicy } from "./policy.js";
 import { meetsThreshold, ScanInputError, scanProject } from "./scanner.js";
-import type { FailOnLevel } from "./types.js";
+import type { FailOnLevel, PolicyPresetName } from "./types.js";
 import { TRAWLY_VERSION } from "./version.js";
+import { explainWhy } from "./why.js";
 
 const FAIL_ON_VALUES: FailOnLevel[] = [
   "critical",
@@ -32,6 +35,7 @@ const FORMAT_VALUES = ["table", "json", "markdown", "sarif"] as const;
 type Format = (typeof FORMAT_VALUES)[number];
 const ENV_FORMAT_VALUES = ["table", "json"] as const;
 type EnvFormat = (typeof ENV_FORMAT_VALUES)[number];
+const POLICY_VALUES: PolicyPresetName[] = ["ci", "strict", "library", "app"];
 
 const PM_VALUES: PackageManager[] = ["npm", "pnpm", "yarn", "bun"];
 
@@ -67,6 +71,15 @@ function parseEnvFormat(value: string): EnvFormat {
     );
   }
   return value as EnvFormat;
+}
+
+function parsePolicy(value: string): PolicyPresetName {
+  if (!POLICY_VALUES.includes(value as PolicyPresetName)) {
+    throw new InvalidArgumentError(
+      `must be one of: ${POLICY_VALUES.join(", ")}`,
+    );
+  }
+  return value as PolicyPresetName;
 }
 
 function parsePm(value: string): PackageManager {
@@ -122,6 +135,11 @@ program
     parseFailOn,
   )
   .option("--config <path>", "Path to trawly.toml")
+  .option(
+    "--policy <name>",
+    `Use a built-in policy preset (${POLICY_VALUES.join("|")})`,
+    parsePolicy,
+  )
   .option("--baseline <path>", "Only fail on findings not present in this baseline")
   .option("--write-baseline <path>", "Write the current active findings baseline")
   .option("--output <path>", "Write report output to a file")
@@ -164,6 +182,11 @@ program
     "table" as Format,
   )
   .option("--config <path>", "Path to trawly.toml")
+  .option(
+    "--policy <name>",
+    `Use a built-in policy preset (${POLICY_VALUES.join("|")})`,
+    parsePolicy,
+  )
   .option("--baseline <path>", "Mark findings already present in this baseline")
   .option("--write-baseline <path>", "Write the current active findings baseline")
   .option("--output <path>", "Write report output to a file")
@@ -190,6 +213,42 @@ program
       },
       { gate: false },
     );
+  });
+
+program
+  .command("init")
+  .description(
+    "Create trawly.toml and write an initial baseline so CI can focus on new findings.",
+  )
+  .argument("[path]", "Project directory to initialize", ".")
+  .option("--config <path>", "Config path to write", "trawly.toml")
+  .option("--baseline <path>", "Baseline path to write", "trawly-baseline.json")
+  .option(
+    "--policy <name>",
+    `Initial policy preset (${POLICY_VALUES.join("|")})`,
+    parsePolicy,
+    "ci" as PolicyPresetName,
+  )
+  .option("--overwrite", "Overwrite an existing config file")
+  .option("--skip-baseline", "Do not scan or write a baseline")
+  .action(async (path: string, opts: InitCliOptions) => {
+    await runInitCommand(path, opts);
+  });
+
+program
+  .command("why")
+  .description(
+    "Explain where a package appears in supported lockfiles.",
+  )
+  .argument("<package>", "Package name to explain")
+  .argument("[path]", "Project directory to inspect", ".")
+  .option(
+    "--lockfile <path>",
+    "Explicit lockfile path. May be repeated.",
+    collectOption,
+  )
+  .action((packageName: string, path: string, opts: WhyCliOptions) => {
+    runWhyCommand(packageName, path, opts);
   });
 
 program
@@ -314,6 +373,7 @@ interface ScanCliOptions {
   format: Format;
   failOn?: FailOnLevel;
   config?: string;
+  policy?: PolicyPresetName;
   baseline?: string;
   writeBaseline?: string;
   output?: string;
@@ -326,6 +386,18 @@ interface ScanCliOptions {
 }
 
 type InspectCliOptions = Omit<ScanCliOptions, "failOn">;
+
+interface InitCliOptions {
+  config: string;
+  baseline: string;
+  policy: PolicyPresetName;
+  overwrite?: boolean;
+  skipBaseline?: boolean;
+}
+
+interface WhyCliOptions {
+  lockfile?: string[];
+}
 
 interface AddCliOptions {
   failOn: FailOnLevel;
@@ -405,12 +477,15 @@ async function runScanCommand(
   try {
     const cwd = resolve(path);
     const config = loadConfig(cwd, opts.config).config;
-    const failOn = opts.failOn ?? config.failOn ?? ("high" as FailOnLevel);
+    const policy = resolvePolicy(opts.policy, config.policy);
+    const failOn =
+      opts.failOn ?? config.failOn ?? policy?.failOn ?? ("high" as FailOnLevel);
     const result = await scanProject({
       cwd,
       lockfile: opts.lockfile,
       sbom: opts.sbom,
       config: opts.config,
+      policy: opts.policy,
       baseline: opts.baseline,
       writeBaseline: opts.writeBaseline,
       risk: opts.risk,
@@ -456,6 +531,101 @@ async function runScanCommand(
       printErr(err.message);
       process.exit(EXIT.invalidInput);
     }
+    printErr(`trawly: ${(err as Error).message}`);
+    process.exit(EXIT.operational);
+  }
+}
+
+async function runInitCommand(
+  path: string,
+  opts: InitCliOptions,
+): Promise<void> {
+  try {
+    const result = await initProject({
+      cwd: path,
+      config: opts.config,
+      baseline: opts.baseline,
+      policy: opts.policy,
+      overwrite: opts.overwrite,
+      writeBaseline: !opts.skipBaseline,
+    });
+
+    const lines: string[] = [];
+    lines.push(
+      result.configWritten
+        ? kleur.green(`✓ Wrote ${result.configPath}`)
+        : kleur.gray(`~ Kept existing ${result.configPath}`),
+    );
+    if (!opts.skipBaseline) {
+      if (result.baselineWritten && result.scan?.baseline?.written) {
+        lines.push(kleur.green(`✓ Wrote ${result.scan.baseline.written}`));
+        lines.push(
+          kleur.gray(
+            `  Baseline contains ${result.scan.baseline.total} active finding(s). Future scans can fail only on new findings with --baseline=${opts.baseline}.`,
+          ),
+        );
+      } else {
+        lines.push(kleur.gray("~ Baseline was not written."));
+      }
+    }
+    for (const warning of result.warnings) {
+      lines.push(kleur.yellow(`~ ${warning}`));
+    }
+    process.stdout.write(`${lines.join("\n")}\n`);
+    process.exit(EXIT.ok);
+  } catch (err) {
+    if (err instanceof ConfigError) {
+      printErr(err.message);
+      process.exit(EXIT.invalidInput);
+    }
+    printErr(`trawly: ${(err as Error).message}`);
+    process.exit(EXIT.operational);
+  }
+}
+
+function runWhyCommand(
+  packageName: string,
+  path: string,
+  opts: WhyCliOptions,
+): void {
+  try {
+    const result = explainWhy(packageName, {
+      cwd: path,
+      lockfile: opts.lockfile,
+    });
+    if (result.lockfiles.length === 0) {
+      printErr(
+        "No supported lockfile found. Pass --lockfile or run in a project with package-lock.json, pnpm-lock.yaml, or yarn.lock.",
+      );
+      process.exit(EXIT.invalidInput);
+    }
+    const lines: string[] = [];
+    lines.push(kleur.bold(`trawly why ${packageName}`));
+    if (result.matches.length === 0) {
+      lines.push(kleur.yellow("No matching package found in scanned lockfiles."));
+      process.stdout.write(`${lines.join("\n")}\n`);
+      process.exit(EXIT.ok);
+    }
+    for (const match of result.matches) {
+      const pkg = match.package;
+      const kind = pkg.direct ? "direct" : "transitive";
+      lines.push(
+        `${pkg.name}@${pkg.version} (${kind}, ${pkg.manager ?? "lockfile"})`,
+      );
+      lines.push(`  path: ${pkg.path}`);
+      lines.push(`  chain: ${match.chain.join(" > ")}`);
+      if (match.note) lines.push(kleur.gray(`  note: ${match.note}`));
+      if (pkg.sourceFile) {
+        lines.push(
+          kleur.gray(
+            `  source: ${pkg.sourceFile}${pkg.line ? `:${pkg.line}` : ""}`,
+          ),
+        );
+      }
+    }
+    process.stdout.write(`${lines.join("\n")}\n`);
+    process.exit(EXIT.ok);
+  } catch (err) {
     printErr(`trawly: ${(err as Error).message}`);
     process.exit(EXIT.operational);
   }
